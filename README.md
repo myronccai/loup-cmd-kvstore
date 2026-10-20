@@ -100,8 +100,7 @@ check it against `SHA256SUMS`, unpack it anywhere and add its `bin` directory to
 explains how to verify the Sigstore signature on `SHA256SUMS`.
 
 Loup Lite leaves out Loup's cryptography library and the full set of Loup
-packages; this example needs neither. The full release is at
-<https://code-craft.ai/loup/download>, and commercial use of Loup needs a
+packages; this example needs neither. Commercial use of Loup needs a
 license: <https://code-craft.ai/loup/license>.
 
 ## Usage
