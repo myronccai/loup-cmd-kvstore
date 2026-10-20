@@ -1,0 +1,90 @@
+@mode(host.native)
+
+# Rebuilding the in-memory index by replaying the log. A pure function of
+# the file's text, so tests can replay hand-made logs without a file.
+
+from store.codec import (Record, PUT, decode_line);
+
+pub const HEADER: string = "KVSTORE 1\n";
+
+pub struct Replay {
+    # key -> latest value, for live keys only
+    pub var index: dict[string, string];
+    pub var puts: int;
+    pub var deletes: int;
+    # whether the file starts with a complete header
+    pub var has_header: bool;
+    # bytes of the header and the good records: where the next record goes
+    pub var good_bytes: int;
+    # bytes after good_bytes: an unterminated, malformed or corrupt tail
+    pub var torn_bytes: int;
+}
+
+pub func empty_replay(): Replay {
+    let index: dict[string, string] = {};
+    return Replay(index = index, puts = 0, deletes = 0, has_header = false, good_bytes = 0, torn_bytes = 0);
+}
+
+# Replays `text`, the whole file, whose size in bytes is `size`. Err if the
+# file is not a kvstore log (it does not start with the header, and is not a
+# torn prefix of it either).
+pub func replay(text: string, size: int): Result[Replay, string] {
+    var state = empty_replay();
+    if (!text.startsWith(HEADER)) {
+        if (HEADER.startsWith(text)) {
+            # Empty, or a crash while the header was being written.
+            state.torn_bytes = size;
+            return Ok(state);
+        }
+        return Err("not a kvstore log");
+    }
+    state.has_header = true;
+    var good = HEADER.len();
+    let lines = text.slice(HEADER.len()).split("\n");
+    # Every element but the last ended with a newline; the last is "" when
+    # the file ends cleanly, or an unterminated (torn) record.
+    var i = 0;
+    while (i < lines.len() - 1) {
+        let line = lines[i];
+        let decoded = decode_line(line);
+        if (decoded.is_none()) {
+            break;
+        }
+        let rec = decoded.unwrap();
+        if (rec.op == PUT) {
+            state.index[rec.key] = rec.value;
+            state.puts += 1;
+        } else {
+            state.index.remove(rec.key);
+            state.deletes += 1;
+        }
+        # Records are ASCII: characters and bytes agree.
+        good += line.len() + 1;
+        i += 1;
+    }
+    state.good_bytes = good;
+    state.torn_bytes = size - good;
+    return Ok(state);
+}
+
+pub func records(state: Replay): int {
+    return state.puts + state.deletes;
+}
+
+# Records that no longer contribute to the state: overwritten puts, deletes,
+# and the puts they deleted.
+pub func stale_records(state: Replay): int {
+    return records(state) - state.index.len();
+}
+
+# The live keys in ascending order.
+pub func sorted_keys(state: Replay): list[string] {
+    var keys: list[string] = [];
+    for (k in state.index.keys()) {
+        keys.push(k);
+    }
+    keys.sort(func(a: string, b: string): int {
+        return if (a < b) { -1 } else if (a > b) { 1 } else { 0 };
+    });
+    return keys;
+}

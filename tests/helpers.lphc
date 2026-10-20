@@ -1,0 +1,21 @@
+@mode(host.native)
+
+# Shared test helpers. Not a test file itself: the tests import it (the
+# Makefile puts tests/ on LOUPPATH).
+
+from debug.assert import (expect);
+from store.logfile import (LogFile);
+
+# expectEq on two strings fails in native tests even when they are equal
+# (Loup 1.26.0), so string results are compared with ==.
+pub func expect_text(actual: string, expected: string, context: string): void {
+    expect(actual == expected, i"{$ context $}: expected '{$ expected $}', got '{$ actual $}'");
+}
+
+# An empty file at `path`, relative to the test binary's working directory
+# (a fresh temporary directory for each test file).
+pub func empty_file(path: string): string {
+    let f = LogFile(path, true);
+    del f;
+    return path;
+}

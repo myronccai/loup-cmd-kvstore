@@ -1,0 +1,18 @@
+@mode(host.native)
+
+# Application identity. Keep APP_NAME and APP_VERSION in step with `name`
+# and `version` in package.lppkg.
+
+pub const APP_NAME: string = "kvstore";
+pub const APP_VERSION: string = "0.1.0";
+pub const APP_SUMMARY: string = "An embedded key-value store in one append-only, checksummed log file.";
+
+# Exit statuses returned by main(), as grep uses them: 0 success, 1 not
+# found, 2 trouble (a usage error or a store error).
+pub const EXIT_OK: int = 0;
+pub const EXIT_NOT_FOUND: int = 1;
+pub const EXIT_USAGE: int = 2;
+pub const EXIT_FAILURE: int = 2;
+
+# The environment variable that names the data file when --file is absent.
+pub const FILE_ENV: string = "KVSTORE_FILE";

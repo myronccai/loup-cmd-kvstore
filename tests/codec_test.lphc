@@ -1,0 +1,67 @@
+@mode(host.native)
+
+from debug.assert import (expect, expectEq);
+from store.codec import (escape, unescape, utf8_bytes, utf8_decode, encode_record,
+    decode_line, put_record, delete_record, hex8, PUT, DELETE);
+from helpers import (expect_text);
+
+func test_escape(): void {
+    expect_text(escape("user:1"), "user:1", "printable ASCII is kept");
+    expect_text(escape("a b"), "a%20b", "space");
+    expect_text(escape("100%"), "100%25", "percent");
+    expect_text(escape("x\ny\tz"), "x%0Ay%09z", "control characters");
+    expect_text(escape("é€"), "%C3%A9%E2%82%AC", "UTF-8 bytes");
+    expect_text(escape(""), "", "empty");
+}
+
+func test_round_trips(): void {
+    for (text in ["plain", "two words", "100% sure", "line\nbreak", "café €5", "\u{1F600}", "-5", ""]) {
+        expect_text(unescape(escape(text)).unwrap_or("<none>"), text, i"round trip of {$ escape(text) $}");
+    }
+}
+
+func test_unescape_rejects(): void {
+    expect(unescape("a b").is_none(), "raw space");
+    expect(unescape("50%").is_none(), "stray percent");
+    expect(unescape("%4").is_none(), "one hex digit");
+    expect(unescape("%zz").is_none(), "not hex");
+    expect(unescape("%C3").is_none(), "truncated UTF-8");
+    expect(unescape("%C0%AF").is_none(), "overlong UTF-8");
+    expect(unescape("%ED%A0%80").is_none(), "surrogate");
+    expect_text(unescape("%41%62").unwrap_or(""), "Ab", "lower and upper hex both decode");
+}
+
+func test_utf8(): void {
+    expectEq(utf8_bytes(0x41).len(), 1, "ASCII");
+    expectEq(utf8_bytes(0xE9).len(), 2, "two bytes");
+    expectEq(utf8_bytes(0x20AC).len(), 3, "three bytes");
+    expectEq(utf8_bytes(0x1F600).len(), 4, "four bytes");
+    expect_text(utf8_decode([0xE2, 0x82, 0xAC]).unwrap_or(""), "€", "euro sign");
+}
+
+func test_encode_record(): void {
+    expect_text(encode_record(put_record("user:1", "Ann Lee")), "128105d1 P user:1 Ann%20Lee\n", "put");
+    expect_text(encode_record(delete_record("user:2")), "54261879 D user:2\n", "delete");
+    expect_text(hex8(0xABC), "00000abc", "hex8 pads");
+}
+
+func test_decode_line(): void {
+    let rec = decode_line("128105d1 P user:1 Ann%20Lee").unwrap();
+    expect_text(rec.op, PUT, "op");
+    expect_text(rec.key, "user:1", "key");
+    expect_text(rec.value, "Ann Lee", "value");
+    let gone = decode_line("54261879 D user:2").unwrap();
+    expect_text(gone.op, DELETE, "delete op");
+    let empty_value = decode_line(encode_record(put_record("k", "")).slice(0, 13)).unwrap();
+    expect_text(empty_value.value, "", "empty value");
+}
+
+func test_decode_rejects(): void {
+    expect(decode_line("128105d1 P user:1 Ann%20Lef").is_none(), "checksum mismatch");
+    expect(decode_line("128105d1 P user:1").is_none(), "put without value");
+    expect(decode_line("").is_none(), "empty line");
+    expect(decode_line("128105d1").is_none(), "only a checksum");
+    expect(decode_line("XYZ05d1z P a b").is_none(), "checksum not hex");
+    let bad_op = encode_record(put_record("a", "b")).replace("P a", "Q a");
+    expect(decode_line(bad_op.slice(0, bad_op.len() - 1)).is_none(), "unknown op");
+}

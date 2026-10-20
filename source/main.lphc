@@ -1,4 +1,4 @@
-@mode(host.dual)
+@mode(host.native)
 
 # Entry point. Keep this file thin: all behaviour lives in cli.app.run so
 # that tests can call it with an argument list.

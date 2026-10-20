@@ -1,0 +1,72 @@
+@mode(host.native)
+
+# The file-handle owner. libc is called directly (`extern native`), which
+# only a native binary can do; `loup run` stops at the first call. The flag
+# values are Linux's.
+
+extern native "c" func open(path: string, flags: int32, mode: int32): int32;
+extern native "c" func write(fd: int32, data: string, count: uint64): int64;
+extern native "c" func fsync(fd: int32): int32;
+extern native "c" func ftruncate(fd: int32, length: int64): int32;
+extern native "c" func close(fd: int32): int32;
+extern native "c" func rename(src: string, dst: string): int32;
+
+const O_WRONLY: int = 1;
+const O_CREAT: int = 64;
+const O_TRUNC: int = 512;
+const O_APPEND: int = 1024;
+# rw-r--r--
+const FILE_MODE: int = 420;
+
+pub class StoreError : Exception {}
+
+# One open file descriptor. A unique class has exactly one owner at a time,
+# so the descriptor cannot be used through a second reference after it is
+# closed, and finalize() closes it exactly once: at `del`, or when the owner
+# goes out of scope.
+pub unique class LogFile {
+    let fd: int32;
+    pub let path: string;
+
+    # Opens `path` for appending (creating it), or, with `truncate`, empties
+    # it first.
+    new(path: string, truncate: bool) {
+        this.path = path;
+        let mode = if (truncate) { O_TRUNC } else { O_APPEND };
+        this.fd = open(path, (O_WRONLY | O_CREAT | mode) as int32, FILE_MODE as int32);
+        if (this.fd < 0) {
+            throw StoreError(i"{$ path $}: cannot open for writing");
+        }
+    }
+
+    # Appends `text` with one write() and makes it durable with fsync(). With
+    # O_APPEND the kernel places the write at the end of the file.
+    pub func append(text: string): void {
+        let want = text.byteLength();
+        let wrote = write(this.fd, text, want as uint64);
+        if (wrote != want as int64) {
+            throw StoreError(i"{$ this.path $}: write failed");
+        }
+        if (fsync(this.fd) != 0) {
+            throw StoreError(i"{$ this.path $}: fsync failed");
+        }
+    }
+
+    # Cuts the file to `size` bytes (to drop a torn tail).
+    pub func cut(size: int): void {
+        if (ftruncate(this.fd, size as int64) != 0) {
+            throw StoreError(i"{$ this.path $}: cannot truncate");
+        }
+    }
+
+    func finalize(): void {
+        close(this.fd);
+    }
+}
+
+# Atomically replaces `dst` with `src` (rename(2)).
+pub func replace_file(src: string, dst: string): void {
+    if (rename(src, dst) != 0) {
+        throw StoreError(i"{$ dst $}: cannot replace with {$ src $}");
+    }
+}

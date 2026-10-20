@@ -1,0 +1,96 @@
+@mode(host.native)
+
+# The store against real files, in the test binary's temporary working
+# directory.
+
+from debug.assert import (expect, expectEq);
+from store.replay import (HEADER);
+from store.codec import (encode_record, put_record);
+from store.store import (Store, read_store, compact, compacted_text);
+from helpers import (expect_text, empty_file);
+
+func test_put_get_and_reopen(): void {
+    let path = empty_file("reopen.kv");
+    let store = Store(path);
+    store.put("a", "1");
+    store.put("b", "two words");
+    store.put("a", "3");
+    expect_text(store.get("a").unwrap_or(""), "3", "latest value in memory");
+    del store;
+    let state = read_store(path);
+    expect_text(state.index.get("b").unwrap_or(""), "two words", "value after reopening");
+    expectEq(state.puts, 3, "three records on disk");
+    expect(readText(path).startsWith(HEADER), "the new file got a header");
+}
+
+func test_remove(): void {
+    let path = empty_file("remove.kv");
+    let store = Store(path);
+    store.put("k", "v");
+    expect(store.remove("k"), "live key removed");
+    expect(!store.remove("k"), "second remove finds nothing");
+    del store;
+    let state = read_store(path);
+    expectEq(state.deletes, 1, "one delete record, not two");
+    expect(state.index.get("k").is_none(), "gone after reopening");
+}
+
+func test_missing_file_reads_as_empty(): void {
+    let state = read_store("does-not-exist.kv");
+    expectEq(state.index.len(), 0, "no keys");
+    expect(!exists("does-not-exist.kv"), "reading does not create it");
+}
+
+func test_torn_tail_is_cut_before_writing(): void {
+    let path = "torn.kv";
+    let good = HEADER + encode_record(put_record("a", "1"));
+    writeText(path, good + "1234abcd P b");
+    let before = read_store(path);
+    expectEq(before.torn_bytes, 12, "torn tail seen by readers");
+    let store = Store(path);
+    expectEq(store.dropped, 12, "dropped when opened for writing");
+    store.put("c", "3");
+    del store;
+    let text = readText(path);
+    expect_text(text, good + encode_record(put_record("c", "3")), "c follows a directly");
+    let after = read_store(path);
+    expectEq(after.torn_bytes, 0, "clean again");
+    expectEq(after.index.len(), 2, "a and c");
+}
+
+func test_foreign_file_is_refused_and_kept(): void {
+    let path = "foreign.txt";
+    writeText(path, "shopping list\n");
+    var refused = false;
+    try {
+        let store = Store(path);
+        del store;
+    } catch (Exception as e) {
+        refused = e.message.contains("not a kvstore log");
+    }
+    expect(refused, "not a kvstore log");
+    expect_text(readText(path), "shopping list\n", "the file is unchanged");
+}
+
+func test_compact(): void {
+    let path = empty_file("compact.kv");
+    let store = Store(path);
+    store.put("b", "1");
+    store.put("a", "2");
+    store.put("b", "3");
+    store.remove("a");
+    store.put("c", "4");
+    let want = compacted_text(store.state);
+    let result = compact(takes: store);
+    expectEq(result.records_before, 5, "records before");
+    expectEq(result.records_after, 2, "records after");
+    expect(result.bytes_after < result.bytes_before, "smaller");
+    let text = readText(path);
+    expect_text(text, want, "file content");
+    expect_text(text, HEADER + encode_record(put_record("b", "3")) + encode_record(put_record("c", "4")), "live keys in order");
+    expect(!exists(path + ".compact"), "temporary file renamed away");
+    let reopened = Store(path);
+    reopened.put("d", "5");
+    del reopened;
+    expectEq(read_store(path).index.len(), 3, "the compacted log takes appends");
+}

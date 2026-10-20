@@ -1,83 +1,204 @@
-# template Loup commandline application
+# loup-cmd-kvstore
 
-A GitHub template for a command-line application written in
-[Loup](https://code-craft.ai/references/loup). It includes argument parsing,
-command dispatch, a sample `hello` command, tests, a native build and a CI
-workflow.
+An embedded key-value store in [Loup](https://code-craft.ai/references/loup):
+one append-only log file of checksummed records, an in-memory index rebuilt
+by replaying it, compaction, and crash safety: a record torn by a crash is
+detected, ignored and cut off before the next write.
 
-After creating a repository from this template, work through
-[REPOSITORY_TODOS.md](REPOSITORY_TODOS.md).
+Part of the **loup-cmd** series of example applications: classic Linux and
+Windows commands, and projects for each Loup execution mode, each in its own
+repository under [myronccai](https://github.com/myronccai?tab=repositories&q=loup-cmd).
+This one is a `host.native` (host-compiled) project.
+
+## What this example shows
+
+- **`unique class` as the file-handle owner.** `LogFile`
+  (`source/store/logfile.lphc`) owns one POSIX file descriptor, and `Store`
+  (`source/store/store.lphc`) owns the `LogFile` and the index. A
+  `unique class` has exactly one owner, so no second reference can use the
+  descriptor after it is closed, and its `finalize()` closes it exactly once,
+  at `del` or at the end of the owner's scope. `unique class` is accepted only
+  in `host.native` (and `freestanding`): in a `host.dual` file it is
+  `E_UNIQUE_CLASS_ARC_BINDING`.
+- **Ownership verbs.** Commands change the store through
+  `cmd_put(edits store: Store, ...)`; compaction consumes it:
+
+  ```loup
+  pub func compact(takes store: Store): CompactResult {
+      ...
+      let out = LogFile(tmp, true);   # PATH.compact, emptied
+      out.append(text);               # one write(), then fsync()
+      del out;                        # close the new file
+      del store;                      # close the old log's descriptor now
+      replace_file(tmp, path);        # rename(2): old log or new, never half
+      return result;
+  }
+  ```
+
+  After `compact(takes: store)` the caller cannot touch `store` again; the
+  compiler reports `E_USE_AFTER_TAKE`.
+- **Calling C.** `open`, `write`, `fsync`, `ftruncate`, `close` and `rename`
+  are libc functions declared with `extern native "c"`. They run only in a
+  native binary; `loup run` stops at the first call.
+- **Crash-safe records.** Each record is one line with a CRC-32 (written in
+  Loup) of its payload, written with one `write()` on an `O_APPEND`
+  descriptor and made durable with `fsync()`. Replay stops at the first
+  unterminated, malformed or corrupt line; a write command first cuts that
+  torn tail off with `ftruncate()`.
+- **Pure replay.** `replay(text)` turns the file's text into the index and
+  counters without touching the file system, so most tests need no file.
 
 ## Requirements
 
+- Linux x86-64 (the open flags are Linux's).
 - Loup 1.26.0 or later:
 
   ```sh
   curl -fsSL https://github.com/code-craft-ai-company/loup-releases/releases/latest/download/loup-install.sh | sh
-  loup --version
   ```
 
-- `make`
-- `clang` 17 or later for native builds. Native builds are supported on Linux
-  x86-64 and arm64, and are a preview on macOS and Windows.
+- `make`, and `clang` 17 or later for the native build.
 
 ## Usage
 
 ```sh
-make run ARGS="--help"            # run from source
-make run ARGS="hello Ann --shout"
-make check                        # type-check the program
-make test                         # run the tests in tests/
-make build                        # native binary: build/myapp
-make ci                           # check, test, build and smoke-test the binary
-make clean
+make build                                        # native binary: build/kvstore
+make ci                                           # check, native unit tests, build, end-to-end tests
+make run ARGS="--file /tmp/demo.kv put city Paris"   # build, then run with ARGS
 ```
+
+The data file comes from `--file FILE` or the `KVSTORE_FILE` environment
+variable:
 
 ```text
-$ build/myapp --help
-usage: myapp [OPTIONS] COMMAND [ARGS...]
-
-A command-line application written in Loup.
-
-Commands:
-  hello [NAME]          Print a greeting (NAME defaults to 'world')
-  help                  Show this help
-
-Options:
-  -g, --greeting TEXT   Greeting used by 'hello' (default: Hello)
-      --shout           Print the greeting in upper case
-  -v, --verbose         Print diagnostic messages to stderr
-  -h, --help            Show this help and exit
-  -V, --version         Show the version and exit
+$ export KVSTORE_FILE=demo.kv
+$ build/kvstore put user:1 'Ann Lee'
+$ build/kvstore put user:2 Bob
+$ build/kvstore put motd $'Hello,\nworld: 100%'
+$ build/kvstore get user:1
+Ann Lee
+$ build/kvstore scan user:
+user:1	Ann Lee
+user:2	Bob
+$ build/kvstore del user:2
+$ build/kvstore get user:2
+kvstore: user:2: not found
+$ build/kvstore put user:1 'Ann B. Lee'
+$ cat demo.kv
+KVSTORE 1
+128105d1 P user:1 Ann%20Lee
+17758304 P user:2 Bob
+6c0dbd15 P motd Hello,%0Aworld:%20100%25
+54261879 D user:2
+f6ac04a9 P user:1 Ann%20B.%20Lee
+$ build/kvstore stats
+file:          demo.kv
+size:          152 bytes
+records:       5 (4 puts, 1 delete)
+live keys:     2
+stale records: 3
+torn tail:     0 bytes
+$ build/kvstore compact
+compacted demo.kv: 5 records, 152 bytes -> 2 records, 84 bytes
+$ cat demo.kv
+KVSTORE 1
+6c0dbd15 P motd Hello,%0Aworld:%20100%25
+f6ac04a9 P user:1 Ann%20B.%20Lee
 ```
 
-Exit status: `0` success, `1` runtime failure, `2` usage error.
+A crash in the middle of a write, simulated by cutting the end off the last
+record:
+
+```text
+$ build/kvstore put user:3 Cy
+$ head -c -6 demo.kv > t && mv t demo.kv
+$ build/kvstore get user:3
+kvstore: user:3: not found
+$ build/kvstore stats
+file:          demo.kv
+size:          99 bytes
+records:       2 (2 puts, 0 deletes)
+live keys:     2
+stale records: 0
+torn tail:     15 bytes
+$ build/kvstore put user:4 Dee
+kvstore: demo.kv: dropped a torn tail of 15 bytes
+$ build/kvstore scan
+motd	Hello,
+world: 100%
+user:1	Ann B. Lee
+user:4	Dee
+```
+
+## Commands and options
+
+| Command | Meaning |
+|---|---|
+| `put KEY VALUE` | set KEY to VALUE |
+| `get KEY` | print the value and a newline |
+| `del KEY` | delete KEY |
+| `scan [PREFIX]` | `KEY<TAB>VALUE` for every live key (starting with PREFIX), sorted |
+| `compact` | rewrite the log with one record per live key |
+| `stats` | size, record counts, live keys, stale records, torn tail |
+| `help` | the help text |
+
+Options: `-f FILE` / `--file FILE` / `--file=FILE` (else `$KVSTORE_FILE`),
+`-h` / `--help`, `-V` / `--version`. Options may come anywhere before `--`;
+a value that starts with `-` goes after it: `kvstore put -- temp -5`.
+
+Keys are non-empty; keys and values may hold any text, including spaces,
+newlines and non-ASCII characters. Reading a file that does not exist acts
+on an empty store and does not create it. A file that does not start with
+`KVSTORE 1` is refused and left untouched.
+
+Exit status: `0` success, `1` key not found (`get`, `del`), `2` usage error or
+store error (not a kvstore log, a failed write).
+
+## The log format
+
+```text
+KVSTORE 1
+<crc32> P <key> <value>
+<crc32> D <key>
+```
+
+Every record is one line of printable ASCII: an 8-digit hexadecimal CRC-32 of
+the payload, then the payload. Keys and values are percent-encoded (every
+byte of their UTF-8 form outside `!`..`~`, and `%`, becomes `%XX`), so a
+line has no spaces or newlines inside a field and its length in characters
+is its length in bytes.
+
+## Limits
+
+- One process at a time: there is no file lock.
+- The whole log is read and replayed on every run, and the index holds the
+  values in memory; fine for thousands of keys, not for gigabytes.
+- `compact` does not `fsync` the directory after `rename()`, so on some file
+  systems a power failure right after compaction can bring back the old log
+  (never a mix of both).
+- A corrupt record in the middle of the log ends the replay there, like a
+  torn tail: later records are ignored and cut off by the next write.
+- Linux x86-64 only (libc flag values).
 
 ## Layout
 
 ```text
-package.lppkg            # Loup manifest
-Makefile                 # run, check, test, build, ci, clean
-source/                  # the application's Loup code
-├── main.loup            # entry point
-├── cli/                 # argument parsing, help text, command dispatch
-└── commands/            # one module per command
-tests/                   # *_test.loup files
-specs/                   # feature specs: requirements, design, tasks
-skills/loup-programmer/  # agent skill for writing Loup
+source/main.lphc              # entry point
+source/appinfo.lphc           # name, version, exit statuses
+source/cli/args.lphc          # options, data file, operand counts
+source/cli/usage.lphc         # --help and --version text
+source/cli/app.lphc           # run(): parse, dispatch, exit status
+source/store/crc32.lphc       # CRC-32
+source/store/codec.lphc       # percent-encoding, record lines
+source/store/replay.lphc      # replay(): index, counters, torn tail
+source/store/logfile.lphc     # libc calls; unique class LogFile
+source/store/store.lphc       # unique class Store; compact(takes store)
+source/commands/kv.lphc       # the commands and their output
+tests/*_test.lphc             # native unit tests (make test)
+tests/helpers.lphc            # expect_text(), empty_file()
+tests/e2e.sh                  # end-to-end tests of build/kvstore (make e2e)
+specs/kvstore/                # requirements, design, tasks
 ```
 
-[AGENTS.md](AGENTS.md) has the full layout, every build and test command, and
-the steps for adding a command.
-
-## Notes on the toolchain
-
-- On Linux x86-64, `loup` is the self-hosted driver and `loup-bootstrap` is
-  Stage0. `check` and `test` use `loup-bootstrap`; on other platforms both
-  names run the same tool. The Makefile handles this.
-- Modules import each other by their path under `source/`
-  (`from cli.args import (Options);`). Tests import them the same way, which
-  is why `make test` puts `source/` on `LOUPPATH`.
-- The Wasm build (`loup-bootstrap build`) is experimental: modules that use
-  `i"..."` interpolation build but trap at run time, so this template builds
-  native binaries.
+[AGENTS.md](AGENTS.md) has every build and test command and the conventions
+for changing the code.

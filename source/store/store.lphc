@@ -1,0 +1,116 @@
+@mode(host.native)
+
+# The store. Readers replay the log into a Replay value and never open the
+# file for writing. Writers own a Store: a unique class holding the LogFile
+# and the index, changed through `edits` and consumed by compaction through
+# `takes`.
+
+from store.codec import (put_record, delete_record, encode_record);
+from store.replay import (Replay, HEADER, replay, empty_replay, records, sorted_keys);
+from store.logfile import (LogFile, StoreError, replace_file);
+
+# Reads and replays the log at `path`; an empty state if it does not exist.
+pub func read_store(path: string): Replay {
+    if (!exists(path)) {
+        return empty_replay();
+    }
+    let size = readBytes(path).len();
+    let text = readText(path);
+    return match replay(text, size) {
+        Ok(state) => state,
+        Err(msg) => {
+            throw StoreError(i"{$ path $}: {$ msg $}");
+        },
+    };
+}
+
+pub unique class Store {
+    pub let path: string;
+    unique var log: LogFile;
+    pub var state: Replay;
+    # bytes of torn tail cut off when the store was opened
+    pub var dropped: int = 0;
+
+    # Opens the log for writing: replays it, cuts off a torn tail so the
+    # next record follows the last good one, and writes the header to a new
+    # (or emptied) file.
+    new(path: string) {
+        this.path = path;
+        this.state = read_store(path);
+        this.log = LogFile(path, false);
+        if (this.state.torn_bytes > 0) {
+            this.dropped = this.state.torn_bytes;
+            this.log.cut(this.state.good_bytes);
+            this.state.torn_bytes = 0;
+        }
+        if (!this.state.has_header) {
+            this.log.append(HEADER);
+            this.state.has_header = true;
+            this.state.good_bytes = HEADER.len();
+        }
+    }
+
+    pub func get(key: string): Option[string] {
+        return this.state.index.get(key);
+    }
+
+    pub modifier func put(key: string, value: string): void {
+        let line = encode_record(put_record(key, value));
+        this.log.append(line);
+        this.state.index[key] = value;
+        this.state.puts = this.state.puts + 1;
+        this.state.good_bytes = this.state.good_bytes + line.len();
+    }
+
+    # Deletes a live key; false (and nothing written) if it is not live.
+    pub modifier func remove(key: string): bool {
+        if (this.state.index.get(key).is_none()) {
+            return false;
+        }
+        let line = encode_record(delete_record(key));
+        this.log.append(line);
+        this.state.index.remove(key);
+        this.state.deletes = this.state.deletes + 1;
+        this.state.good_bytes = this.state.good_bytes + line.len();
+        return true;
+    }
+}
+
+pub struct CompactResult {
+    pub records_before: int;
+    pub bytes_before: int;
+    pub records_after: int;
+    pub bytes_after: int;
+}
+
+# The text of a compacted log: the header and one put per live key, in key
+# order.
+pub func compacted_text(state: Replay): string {
+    var parts = [HEADER];
+    for (key in sorted_keys(state)) {
+        parts.push(encode_record(put_record(key, state.index.get(key).unwrap_or(""))));
+    }
+    return parts.join("");
+}
+
+# Rewrites the log with only the live records. The new log is written to
+# PATH.compact and made durable, the old store is consumed (its descriptor
+# closed), and rename() swaps the new file in: a crash leaves either the old
+# log or the new one. The caller's store cannot be used afterwards.
+pub func compact(takes store: Store): CompactResult {
+    let path = store.path;
+    let text = compacted_text(store.state);
+    let result = CompactResult(
+        records_before = records(store.state),
+        bytes_before = store.state.good_bytes,
+        records_after = store.state.index.len(),
+        bytes_after = text.len(),
+    );
+    let tmp = path + ".compact";
+    let out = LogFile(tmp, true);
+    out.append(text);
+    del out;
+    del store;
+    replace_file(tmp, path);
+    return result;
+}

@@ -1,0 +1,93 @@
+@mode(host.native)
+
+from debug.assert import (expect, expectEq);
+from store.codec import (encode_record, put_record, delete_record);
+from store.replay import (HEADER, replay, records, stale_records, sorted_keys);
+from helpers import (expect_text);
+
+func log(lines: list[string]): string {
+    return HEADER + lines.join("");
+}
+
+func p(k: string, v: string): string {
+    return encode_record(put_record(k, v));
+}
+
+func d(k: string): string {
+    return encode_record(delete_record(k));
+}
+
+func test_empty_and_header(): void {
+    let empty = replay("", 0).unwrap();
+    expect(!empty.has_header, "no header yet");
+    expectEq(empty.index.len(), 0, "no keys");
+    expectEq(empty.torn_bytes, 0, "nothing torn");
+    let header_only = replay(HEADER, 10).unwrap();
+    expect(header_only.has_header, "header");
+    expectEq(header_only.good_bytes, 10, "good bytes");
+}
+
+func test_torn_header(): void {
+    let state = replay("KVST", 4).unwrap();
+    expect(!state.has_header, "incomplete header");
+    expectEq(state.torn_bytes, 4, "four torn bytes");
+    expectEq(state.good_bytes, 0, "start again from zero");
+}
+
+func test_not_a_log(): void {
+    expect(replay("shopping list\n", 14).is_err(), "foreign text");
+    expect(replay("KVSTORE 2\n", 10).is_err(), "other version");
+}
+
+func test_puts_overwrites_deletes(): void {
+    let text = log([p("a", "1"), p("b", "2"), p("a", "3"), d("b"), p("c", "4")]);
+    let state = replay(text, text.len()).unwrap();
+    expectEq(state.puts, 4, "puts");
+    expectEq(state.deletes, 1, "deletes");
+    expectEq(records(state), 5, "records");
+    expectEq(state.index.len(), 2, "live keys");
+    expectEq(stale_records(state), 3, "stale records");
+    expect_text(state.index.get("a").unwrap_or(""), "3", "latest value wins");
+    expect(state.index.get("b").is_none(), "deleted");
+    expect_text(sorted_keys(state).join(","), "a,c", "sorted keys");
+    expectEq(state.good_bytes, text.len(), "all good");
+    expectEq(state.torn_bytes, 0, "nothing torn");
+}
+
+func test_unterminated_tail(): void {
+    let good = log([p("a", "1"), p("b", "2")]);
+    let torn = p("c", "3");
+    let text = good + torn.slice(0, torn.len() - 3);
+    let state = replay(text, text.len()).unwrap();
+    expectEq(state.index.len(), 2, "c is not visible");
+    expectEq(state.good_bytes, good.len(), "good bytes end before c");
+    expectEq(state.torn_bytes, torn.len() - 3, "torn bytes");
+}
+
+func test_missing_newline_only(): void {
+    let good = log([p("a", "1")]);
+    let last = p("b", "2");
+    let text = good + last.slice(0, last.len() - 1);
+    let state = replay(text, text.len()).unwrap();
+    expect(state.index.get("b").is_none(), "a record without its newline is torn");
+    expectEq(state.torn_bytes, last.len() - 1, "torn bytes");
+}
+
+func test_corrupt_record_ends_the_log(): void {
+    let good = log([p("a", "1")]);
+    let corrupt = p("b", "2").replace("P b 2", "P b 3");
+    let after = p("c", "3");
+    let text = good + corrupt + after;
+    let state = replay(text, text.len()).unwrap();
+    expectEq(state.index.len(), 1, "only a survives");
+    expect(state.index.get("c").is_none(), "records after a bad one are ignored");
+    expectEq(state.torn_bytes, corrupt.len() + after.len(), "everything after a is torn");
+}
+
+func test_size_counts_bytes(): void {
+    # The size passed in is the file's byte count, which can exceed the
+    # character count when garbage holds multi-byte characters.
+    let good = log([p("a", "1")]);
+    let state = replay(good + "é", good.len() + 2).unwrap();
+    expectEq(state.torn_bytes, 2, "two bytes of torn tail");
+}

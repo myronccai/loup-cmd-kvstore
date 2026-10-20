@@ -1,0 +1,142 @@
+@mode(host.native)
+
+# Command-line parsing. Loup 1.26 has no CLI library, so arguments are
+# parsed by hand into an Options value.
+#
+# Grammar: [OPTIONS] COMMAND [OPERANDS...]
+#   Options may appear anywhere before `--`; everything after `--` is an
+#   operand. Value options accept `--name VALUE` and `--name=VALUE`.
+
+from appinfo import (FILE_ENV);
+
+pub struct Options {
+    pub command: string;
+    pub operands: list[string];
+    pub help: bool;
+    pub version: bool;
+    # "" when --file was not given
+    pub file: string;
+}
+
+pub func parse_args(argv: list[string]): Result[Options, string] {
+    var command = "";
+    var operands: list[string] = [];
+    var help = false;
+    var version = false;
+    var file = "";
+    var only_operands = false;
+
+    var i = 0;
+    while (i < argv.len()) {
+        let arg = argv[i];
+        i += 1;
+
+        if (only_operands or arg == "-" or !arg.startsWith("-")) {
+            if (command.len() == 0) {
+                command = arg;
+            } else {
+                operands.push(arg);
+            }
+            continue;
+        }
+        if (arg == "--") {
+            only_operands = true;
+            continue;
+        }
+
+        # Split `--name=value` into its name and inline value.
+        var name = arg;
+        var inline_value: Option[string] = None;
+        if (arg.startsWith("--") and arg.contains("=")) {
+            let parts = arg.split("=");
+            name = parts[0];
+            inline_value = Some(parts.slice(1).join("="));
+        }
+
+        if (name == "-f" or name == "--file") {
+            match inline_value {
+                Some(v) => { file = v; },
+                None => {
+                    if (i >= argv.len()) {
+                        return Err(i"option '{$ name $}' requires an argument");
+                    }
+                    file = argv[i];
+                    i += 1;
+                },
+            }
+            if (file.len() == 0) {
+                return Err("the file name is empty");
+            }
+            continue;
+        }
+
+        if (inline_value.is_some()) {
+            return Err(i"option '{$ name $}' doesn't allow an argument");
+        }
+        if (name == "-h" or name == "--help") {
+            help = true;
+        } else if (name == "-V" or name == "--version") {
+            version = true;
+        } else {
+            return Err(i"unrecognized option '{$ name $}'");
+        }
+    }
+
+    return Ok(Options(
+        command = command,
+        operands = operands,
+        help = help,
+        version = version,
+        file = file,
+    ));
+}
+
+# The data file: --file, else the KVSTORE_FILE environment variable
+# (passed in, so tests need not change the environment).
+pub func resolve_file(opts: Options, from_env: Option[string]): Result[string, string] {
+    if (opts.file.len() > 0) {
+        return Ok(opts.file);
+    }
+    let env_file = from_env.unwrap_or("");
+    if (env_file.len() > 0) {
+        return Ok(env_file);
+    }
+    return Err(i"no data file: use --file FILE or set {$ FILE_ENV $}");
+}
+
+# How many operands each command takes: (minimum, maximum), or (-1, -1) for
+# an unknown command.
+pub func operand_range(command: string): (int, int) {
+    if (command == "put") {
+        return (2, 2);
+    } else if (command == "get" or command == "del") {
+        return (1, 1);
+    } else if (command == "scan") {
+        return (0, 1);
+    } else if (command == "compact" or command == "stats" or command == "help") {
+        return (0, 0);
+    }
+    return (-1, -1);
+}
+
+# Checks the command and its operands; Err with the usage message.
+pub func check_command(opts: Options): Result[string, string] {
+    if (opts.command.len() == 0) {
+        return Err("no command given");
+    }
+    let (lo, hi) = operand_range(opts.command);
+    if (lo < 0) {
+        return Err(i"unknown command '{$ opts.command $}'");
+    }
+    let n = opts.operands.len();
+    if (n < lo or n > hi) {
+        let shape = if (opts.command == "put") { "KEY VALUE" }
+            else if (opts.command == "scan") { "[PREFIX]" }
+            else if (lo == 1) { "KEY" } else { "no operands" };
+        return Err(i"'{$ opts.command $}' takes {$ shape $}");
+    }
+    if (lo >= 1 and opts.operands[0].len() == 0) {
+        return Err("the key is empty");
+    }
+    return Ok(opts.command);
+}

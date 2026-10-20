@@ -1,0 +1,56 @@
+@mode(host.native)
+
+from debug.assert import (expect, expectEq);
+from cli.args import (parse_args, resolve_file, check_command);
+from helpers import (expect_text);
+
+func test_command_and_operands(): void {
+    let opts = parse_args(["put", "k", "v"]).unwrap();
+    expect_text(opts.command, "put", "command");
+    expectEq(opts.operands.len(), 2, "operands");
+    expect_text(opts.file, "", "no file option");
+}
+
+func test_file_option_forms(): void {
+    expect_text(parse_args(["-f", "a.kv", "stats"]).unwrap().file, "a.kv", "-f FILE");
+    expect_text(parse_args(["stats", "--file", "b.kv"]).unwrap().file, "b.kv", "after the command");
+    expect_text(parse_args(["--file=c.kv", "stats"]).unwrap().file, "c.kv", "--file=FILE");
+    expect(parse_args(["stats", "-f"]).is_err(), "missing value");
+    expect(parse_args(["--file=", "stats"]).is_err(), "empty value");
+}
+
+func test_double_dash(): void {
+    let opts = parse_args(["put", "--", "k", "-5"]).unwrap();
+    expect_text(opts.operands[1], "-5", "value after --");
+    expect(parse_args(["put", "k", "-5"]).is_err(), "-5 before -- is an option");
+}
+
+func test_help_version_unknown(): void {
+    expect(parse_args(["-h"]).unwrap().help, "-h");
+    expect(parse_args(["--version"]).unwrap().version, "--version");
+    expect(parse_args(["--bogus"]).is_err(), "unknown option");
+    expect(parse_args(["--help=yes"]).is_err(), "value on a flag");
+}
+
+func test_resolve_file(): void {
+    let with_option = parse_args(["-f", "x.kv", "stats"]).unwrap();
+    let without = parse_args(["stats"]).unwrap();
+    expect_text(resolve_file(with_option, Some("env.kv")).unwrap(), "x.kv", "--file wins");
+    expect_text(resolve_file(without, Some("env.kv")).unwrap(), "env.kv", "KVSTORE_FILE");
+    expect(resolve_file(without, None).is_err(), "neither");
+    expect(resolve_file(without, Some("")).is_err(), "empty variable");
+}
+
+func test_check_command(): void {
+    expect(check_command(parse_args(["put", "k", "v"]).unwrap()).is_ok(), "put KEY VALUE");
+    expect(check_command(parse_args(["put", "k", ""]).unwrap()).is_ok(), "empty value is fine");
+    expect(check_command(parse_args(["put", "k"]).unwrap()).is_err(), "put without value");
+    expect(check_command(parse_args(["get"]).unwrap()).is_err(), "get without key");
+    expect(check_command(parse_args(["get", ""]).unwrap()).is_err(), "empty key");
+    expect(check_command(parse_args(["scan"]).unwrap()).is_ok(), "scan without prefix");
+    expect(check_command(parse_args(["scan", "a", "b"]).unwrap()).is_err(), "scan with two");
+    expect(check_command(parse_args(["stats", "x"]).unwrap()).is_err(), "stats with an operand");
+    expect(check_command(parse_args(["frobnicate"]).unwrap()).is_err(), "unknown command");
+    let none: list[string] = [];
+    expect(check_command(parse_args(none).unwrap()).is_err(), "no command");
+}

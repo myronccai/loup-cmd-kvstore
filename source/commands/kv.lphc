@@ -1,0 +1,108 @@
+@mode(host.native)
+
+# The commands. Readers (get, scan, stats) work on a replayed state; writers
+# (put, del, compact) open a Store, which owns the file descriptor. The
+# render_* functions are pure so tests can check the output.
+
+from appinfo import (APP_NAME, EXIT_OK, EXIT_NOT_FOUND);
+from store.replay import (Replay, records, stale_records, sorted_keys);
+from store.store import (Store, CompactResult, read_store, compact);
+
+# KEY<TAB>VALUE lines for the live keys that start with `prefix`, sorted.
+pub func render_scan(state: Replay, prefix: string): string {
+    var out = "";
+    for (key in sorted_keys(state)) {
+        if (key.startsWith(prefix)) {
+            out += key + "\t" + state.index.get(key).unwrap_or("") + "\n";
+        }
+    }
+    return out;
+}
+
+func field(key: string, value: string): string {
+    var label = key + ":";
+    while (label.len() < 15) {
+        label += " ";
+    }
+    return label + value + "\n";
+}
+
+func plural(n: int, word: string): string {
+    return if (n == 1) { i"1 {$ word $}" } else { i"{$ n $} {$ word $}s" };
+}
+
+pub func render_stats(path: string, state: Replay): string {
+    let size = state.good_bytes + state.torn_bytes;
+    return field("file", path)
+        + field("size", plural(size, "byte"))
+        + field("records", i"{$ records(state) $} ({$ plural(state.puts, "put") $}, {$ plural(state.deletes, "delete") $})")
+        + field("live keys", str(state.index.len()))
+        + field("stale records", str(stale_records(state)))
+        + field("torn tail", plural(state.torn_bytes, "byte"));
+}
+
+pub func render_compact(path: string, r: CompactResult): string {
+    return i"compacted {$ path $}: {$ plural(r.records_before, "record") $}, {$ plural(r.bytes_before, "byte") $} -> {$ plural(r.records_after, "record") $}, {$ plural(r.bytes_after, "byte") $}\n";
+}
+
+func not_found(key: string): int {
+    printErr(i"{$ APP_NAME $}: {$ key $}: not found");
+    return EXIT_NOT_FOUND;
+}
+
+# Opens the store for writing, reporting a torn tail that had to be cut.
+func open_store(path: string): Store {
+    let store = Store(path);
+    if (store.dropped > 0) {
+        printErr(i"{$ APP_NAME $}: {$ path $}: dropped a torn tail of {$ plural(store.dropped, "byte") $}");
+    }
+    return store;
+}
+
+pub func cmd_put(edits store: Store, key: string, value: string): int {
+    store.put(key, value);
+    return EXIT_OK;
+}
+
+pub func cmd_del(edits store: Store, key: string): int {
+    if (!store.remove(key)) {
+        return not_found(key);
+    }
+    return EXIT_OK;
+}
+
+pub func cmd_get(state: Replay, key: string): int {
+    match state.index.get(key) {
+        Some(value) => {
+            println(value);
+            return EXIT_OK;
+        },
+        None => {
+            return not_found(key);
+        },
+    }
+}
+
+# Runs a checked command (see cli.args.check_command) on the store at path.
+pub func run_command(command: string, operands: list[string], path: string): int {
+    if (command == "get") {
+        return cmd_get(read_store(path), operands[0]);
+    } else if (command == "scan") {
+        let prefix = if (operands.len() > 0) { operands[0] } else { "" };
+        print(render_scan(read_store(path), prefix));
+        return EXIT_OK;
+    } else if (command == "stats") {
+        print(render_stats(path, read_store(path)));
+        return EXIT_OK;
+    }
+
+    let store = open_store(path);
+    if (command == "put") {
+        return cmd_put(edits: store, operands[0], operands[1]);
+    } else if (command == "del") {
+        return cmd_del(edits: store, operands[0]);
+    }
+    # compact
+    print(render_compact(path, compact(takes: store)));
+    return EXIT_OK;
+}

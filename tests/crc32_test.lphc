@@ -1,0 +1,20 @@
+@mode(host.native)
+
+from debug.assert import (expect, expectEq);
+from store.crc32 import (crc32_ascii, crc32_bytes);
+
+func test_check_value(): void {
+    # The standard CRC-32 check value.
+    expectEq(crc32_ascii("123456789"), 0xCBF43926, "123456789");
+}
+
+func test_known_values(): void {
+    expectEq(crc32_ascii(""), 0, "empty");
+    expectEq(crc32_ascii("a"), 0xE8B7BE43, "a");
+    expectEq(crc32_ascii("P user:1 Ann%20Lee"), 0x128105D1, "a payload (zlib agrees)");
+}
+
+func test_bytes_and_ascii_agree(): void {
+    expectEq(crc32_bytes([80, 32, 107, 32, 118]), crc32_ascii("P k v"), "same bytes");
+    expectEq(crc32_ascii("café"), -1, "non-ASCII is rejected");
+}

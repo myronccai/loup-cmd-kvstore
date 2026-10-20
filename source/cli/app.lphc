@@ -1,0 +1,55 @@
+@mode(host.native)
+
+from appinfo import (APP_NAME, EXIT_OK, EXIT_FAILURE, EXIT_USAGE, FILE_ENV);
+from cli.args import (Options, parse_args, resolve_file, check_command);
+from cli.usage import (usage, version_line);
+from commands.kv import (run_command);
+
+# Parses argv, runs the command and returns the exit status.
+pub func run(argv: list[string]): int {
+    return run_with_env(argv, env(FILE_ENV));
+}
+
+# As run(), with the value of KVSTORE_FILE passed in.
+pub func run_with_env(argv: list[string], file_env: Option[string]): int {
+    let opts = match parse_args(argv) {
+        Ok(parsed) => parsed,
+        Err(msg) => {
+            return usage_error(msg);
+        },
+    };
+
+    if (opts.help or opts.command == "help") {
+        println(usage());
+        return EXIT_OK;
+    }
+    if (opts.version) {
+        println(version_line());
+        return EXIT_OK;
+    }
+    match check_command(opts) {
+        Ok(cmd) => {},
+        Err(msg) => {
+            return usage_error(msg);
+        },
+    }
+    let path = match resolve_file(opts, file_env) {
+        Ok(p) => p,
+        Err(msg) => {
+            return usage_error(msg);
+        },
+    };
+
+    try {
+        return run_command(opts.command, opts.operands, path);
+    } catch (Exception as e) {
+        printErr(i"{$ APP_NAME $}: {$ e.message $}");
+        return EXIT_FAILURE;
+    }
+}
+
+func usage_error(msg: string): int {
+    printErr(i"{$ APP_NAME $}: {$ msg $}");
+    printErr(i"Try '{$ APP_NAME $} --help' for more information.");
+    return EXIT_USAGE;
+}

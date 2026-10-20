@@ -1,0 +1,43 @@
+@mode(host.native)
+
+from debug.assert import (expect, expectEq);
+from store.codec import (encode_record, put_record, delete_record);
+from store.replay import (HEADER, replay);
+from store.store import (CompactResult);
+from commands.kv import (render_scan, render_stats, render_compact);
+from helpers import (expect_text);
+
+func sample_text(): string {
+    return HEADER + encode_record(put_record("user:2", "Bob"))
+        + encode_record(put_record("user:1", "Ann Lee"))
+        + encode_record(put_record("note", "x"))
+        + encode_record(delete_record("note"));
+}
+
+func test_scan(): void {
+    let text = sample_text();
+    let state = replay(text, text.len()).unwrap();
+    expect_text(render_scan(state, ""), "user:1\tAnn Lee\nuser:2\tBob\n", "all keys, sorted");
+    expect_text(render_scan(state, "user:2"), "user:2\tBob\n", "prefix");
+    expect_text(render_scan(state, "zzz"), "", "no match");
+}
+
+func test_stats(): void {
+    let text = sample_text() + "torn";
+    let state = replay(text, text.len()).unwrap();
+    let want = [
+        "file:          data.kv",
+        i"size:          {$ text.len() $} bytes",
+        "records:       4 (3 puts, 1 delete)",
+        "live keys:     2",
+        "stale records: 2",
+        "torn tail:     4 bytes",
+        "",
+    ];
+    expect_text(render_stats("data.kv", state), want.join("\n"), "stats");
+}
+
+func test_compact_line(): void {
+    let r = CompactResult(records_before = 5, bytes_before = 166, records_after = 1, bytes_after = 28);
+    expect_text(render_compact("d.kv", r), "compacted d.kv: 5 records, 166 bytes -> 1 record, 28 bytes\n", "summary");
+}

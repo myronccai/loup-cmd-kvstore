@@ -3,3 +3,6 @@
 
 # Loup toolchain scratch files (partial IR from failed native builds)
 /.temp/
+
+# Stage0 (loup-bootstrap build) artifact cache
+/.loup-cache/

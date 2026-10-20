@@ -1,0 +1,222 @@
+@mode(host.native)
+
+# The record codec. A log line is
+#
+#     <crc32: 8 lowercase hex digits> <payload>
+#
+# where the payload is `P KEY VALUE` (put) or `D KEY` (delete). KEY and
+# VALUE are percent-encoded: every byte of their UTF-8 form outside `!`..`~`,
+# and `%` itself, becomes `%XX`. A line is therefore printable ASCII with no
+# spaces inside a field, and its length in characters is its length in bytes.
+
+from store.crc32 import (crc32_ascii);
+
+pub const PUT: string = "P";
+pub const DELETE: string = "D";
+
+pub struct Record {
+    # PUT or DELETE
+    pub op: string;
+    pub key: string;
+    # "" for a delete
+    pub value: string;
+}
+
+const HEX_DIGITS: string = "0123456789ABCDEF";
+
+func code_of(ch: string): int {
+    return char.fromString(ch).unwrap().toInt();
+}
+
+# The UTF-8 bytes of one code point.
+pub func utf8_bytes(cp: int): list[int] {
+    if (cp < 0x80) {
+        return [cp];
+    }
+    if (cp < 0x800) {
+        return [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)];
+    }
+    if (cp < 0x10000) {
+        return [0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)];
+    }
+    return [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)];
+}
+
+pub func escape(text: string): string {
+    var parts: list[string] = [];
+    for (ch in text) {
+        let cp = code_of(ch);
+        if (cp >= 0x21 and cp <= 0x7E and cp != 0x25) {
+            parts.push(ch);
+        } else {
+            for (b in utf8_bytes(cp)) {
+                parts.push("%" + HEX_DIGITS.slice(b >> 4, (b >> 4) + 1) + HEX_DIGITS.slice(b & 0xF, (b & 0xF) + 1));
+            }
+        }
+    }
+    return parts.join("");
+}
+
+func hex_value(ch: string): int {
+    let i = "0123456789abcdef".index_of(ch.toLowerCase());
+    return if (ch.len() == 1 and i >= 0) { i } else { -1 };
+}
+
+# Decodes UTF-8 bytes to text; None if they are not valid UTF-8.
+pub func utf8_decode(values: list[int]): Option[string] {
+    var parts: list[string] = [];
+    var i = 0;
+    while (i < values.len()) {
+        let b = values[i];
+        var cp = 0;
+        var extra = 0;
+        if (b < 0x80) {
+            cp = b;
+        } else if ((b & 0xE0) == 0xC0) {
+            cp = b & 0x1F;
+            extra = 1;
+        } else if ((b & 0xF0) == 0xE0) {
+            cp = b & 0x0F;
+            extra = 2;
+        } else if ((b & 0xF8) == 0xF0) {
+            cp = b & 0x07;
+            extra = 3;
+        } else {
+            return None;
+        }
+        if (i + extra >= values.len()) {
+            return None;
+        }
+        for (k in 1..extra + 1) {
+            let c = values[i + k];
+            if ((c & 0xC0) != 0x80) {
+                return None;
+            }
+            cp = (cp << 6) | (c & 0x3F);
+        }
+        # Reject overlong forms, surrogates and values past U+10FFFF.
+        let min = if (extra == 1) { 0x80 } else if (extra == 2) { 0x800 } else if (extra == 3) { 0x10000 } else { 0 };
+        if (cp < min or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF)) {
+            return None;
+        }
+        parts.push(str(char.of(cp)));
+        i += extra + 1;
+    }
+    return Some(parts.join(""));
+}
+
+# Reverses escape(); None for a stray `%`, a character outside `!`..`~`, or
+# bytes that are not UTF-8.
+pub func unescape(text: string): Option[string] {
+    var chars: list[string] = [];
+    for (ch in text) {
+        chars.push(ch);
+    }
+    var values: list[int] = [];
+    var i = 0;
+    while (i < chars.len()) {
+        let ch = chars[i];
+        if (ch == "%") {
+            if (i + 2 >= chars.len()) {
+                return None;
+            }
+            let hi = hex_value(chars[i + 1]);
+            let lo = hex_value(chars[i + 2]);
+            if (hi < 0 or lo < 0) {
+                return None;
+            }
+            values.push(hi * 16 + lo);
+            i += 3;
+        } else {
+            let cp = code_of(ch);
+            if (cp < 0x21 or cp > 0x7E) {
+                return None;
+            }
+            values.push(cp);
+            i += 1;
+        }
+    }
+    return utf8_decode(values);
+}
+
+pub func hex8(n: int): string {
+    var out = "";
+    var v = n;
+    for (k in 0..8) {
+        out = "0123456789abcdef".slice(v & 0xF, (v & 0xF) + 1) + out;
+        v = v >> 4;
+    }
+    return out;
+}
+
+func parse_hex8(text: string): int {
+    if (text.len() != 8) {
+        return -1;
+    }
+    var v = 0;
+    for (ch in text) {
+        let d = "0123456789abcdef".index_of(ch);
+        if (d < 0 or ch.len() != 1) {
+            return -1;
+        }
+        v = v * 16 + d;
+    }
+    return v;
+}
+
+pub func payload_of(rec: Record): string {
+    if (rec.op == DELETE) {
+        return DELETE + " " + escape(rec.key);
+    }
+    return PUT + " " + escape(rec.key) + " " + escape(rec.value);
+}
+
+# The complete log line for a record, newline included.
+pub func encode_record(rec: Record): string {
+    let payload = payload_of(rec);
+    return hex8(crc32_ascii(payload)) + " " + payload + "\n";
+}
+
+pub func put_record(key: string, value: string): Record {
+    return Record(op = PUT, key = key, value = value);
+}
+
+pub func delete_record(key: string): Record {
+    return Record(op = DELETE, key = key, value = "");
+}
+
+# Decodes one line (without its newline). None if it is malformed or its
+# checksum does not match: the caller treats that as the start of a torn
+# tail.
+pub func decode_line(line: string): Option[Record] {
+    if (line.len() < 11 or line.slice(8, 9) != " ") {
+        return None;
+    }
+    let want = parse_hex8(line.slice(0, 8));
+    let payload = line.slice(9);
+    if (want < 0 or crc32_ascii(payload) != want) {
+        return None;
+    }
+    let fields = payload.split(" ");
+    let op = fields[0];
+    if (op == PUT and fields.len() == 3) {
+        let key = unescape(fields[1]);
+        let value = unescape(fields[2]);
+        if (key.is_none() or value.is_none()) {
+            return None;
+        }
+        let k = key.unwrap();
+        if (k.len() == 0) {
+            return None;
+        }
+        return Some(Record(op = PUT, key = k, value = value.unwrap()));
+    }
+    if (op == DELETE and fields.len() == 2) {
+        let key = unescape(fields[1]).unwrap_or("");
+        if (key.len() == 0) {
+            return None;
+        }
+        return Some(Record(op = DELETE, key = key, value = ""));
+    }
+    return None;
+}

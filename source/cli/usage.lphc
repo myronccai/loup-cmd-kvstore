@@ -1,0 +1,35 @@
+@mode(host.native)
+
+from appinfo import (APP_NAME, APP_VERSION, APP_SUMMARY, FILE_ENV);
+
+pub func usage(): string {
+    let lines = [
+        i"usage: {$ APP_NAME $} [OPTIONS] COMMAND [ARGS...]",
+        "",
+        APP_SUMMARY,
+        "",
+        "Commands:",
+        "  put KEY VALUE         Set KEY to VALUE",
+        "  get KEY               Print the value of KEY",
+        "  del KEY               Delete KEY",
+        "  scan [PREFIX]         Print KEY<TAB>VALUE for every key (with PREFIX), sorted",
+        "  compact               Rewrite the log with only the live records",
+        "  stats                 Print the size, record counts and torn-tail size",
+        "  help                  Show this help",
+        "",
+        "Options:",
+        i"  -f, --file FILE       The data file (default: ${$ FILE_ENV $})",
+        "  -h, --help            Show this help and exit",
+        "  -V, --version         Show the version and exit",
+        "",
+        "Options may come anywhere before '--'; put a value that starts with '-'",
+        "after it: kvstore put -- KEY -5",
+        "",
+        "Exit status: 0 success, 1 key not found, 2 usage or store error.",
+    ];
+    return lines.join("\n");
+}
+
+pub func version_line(): string {
+    return i"{$ APP_NAME $} (loup-cmd-{$ APP_NAME $}) {$ APP_VERSION $}";
+}

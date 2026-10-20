@@ -1,0 +1,35 @@
+@mode(host.native)
+
+# Exit statuses through run_with_env(), with data files in the test
+# binary's temporary working directory. These tests print the program's
+# normal output.
+
+from debug.assert import (expectEq);
+from appinfo import (EXIT_OK, EXIT_NOT_FOUND, EXIT_USAGE, EXIT_FAILURE);
+from cli.app import (run_with_env);
+
+func test_round_trip_statuses(): void {
+    let f = Some("app.kv");
+    expectEq(run_with_env(["put", "k", "v"], f), EXIT_OK, "put");
+    expectEq(run_with_env(["get", "k"], f), EXIT_OK, "get");
+    expectEq(run_with_env(["del", "k"], f), EXIT_OK, "del");
+    expectEq(run_with_env(["get", "k"], f), EXIT_NOT_FOUND, "get after del");
+    expectEq(run_with_env(["del", "k"], f), EXIT_NOT_FOUND, "del twice");
+    expectEq(run_with_env(["scan"], f), EXIT_OK, "scan");
+    expectEq(run_with_env(["stats"], f), EXIT_OK, "stats");
+    expectEq(run_with_env(["compact"], f), EXIT_OK, "compact");
+}
+
+func test_usage_statuses(): void {
+    let none: Option[string] = None;
+    expectEq(run_with_env(["--version"], none), EXIT_OK, "--version");
+    expectEq(run_with_env(["help"], none), EXIT_OK, "help command");
+    expectEq(run_with_env(["get", "k"], none), EXIT_USAGE, "no data file");
+    expectEq(run_with_env(["get"], Some("x.kv")), EXIT_USAGE, "missing key");
+    expectEq(run_with_env(["--bogus"], Some("x.kv")), EXIT_USAGE, "unknown option");
+}
+
+func test_store_error_status(): void {
+    writeText("not-a-log.txt", "shopping list\n");
+    expectEq(run_with_env(["get", "k"], Some("not-a-log.txt")), EXIT_FAILURE, "foreign file");
+}

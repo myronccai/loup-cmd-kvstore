@@ -1,0 +1,42 @@
+@mode(host.native)
+
+# CRC-32 (IEEE 802.3, the zlib and PNG polynomial, reflected 0xEDB88320),
+# table-driven. Records are ASCII, so each character is one byte. Loup's
+# `int` is 64 bits, so the 32-bit register is kept in range with masks.
+
+func make_table(): list[int] {
+    var table: list[int] = [];
+    for (n in 0..256) {
+        var c = n;
+        for (k in 0..8) {
+            c = if ((c & 1) == 1) { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+        }
+        table.push(c);
+    }
+    return table;
+}
+
+let CRC_TABLE: list[int] = make_table();
+
+# The CRC-32 of the bytes `values` (each 0..255).
+pub func crc32_bytes(values: list[int]): int {
+    var crc = 0xFFFFFFFF;
+    for (b in values) {
+        crc = CRC_TABLE[(crc ^ b) & 0xFF] ^ (crc >> 8);
+    }
+    return crc ^ 0xFFFFFFFF;
+}
+
+# The CRC-32 of an ASCII string, or -1 if it holds a character above 0x7F
+# (which no valid record does).
+pub func crc32_ascii(text: string): int {
+    var crc = 0xFFFFFFFF;
+    for (ch in text) {
+        let b = char.fromString(ch).unwrap().toInt();
+        if (b > 0x7F) {
+            return -1;
+        }
+        crc = CRC_TABLE[(crc ^ b) & 0xFF] ^ (crc >> 8);
+    }
+    return crc ^ 0xFFFFFFFF;
+}
