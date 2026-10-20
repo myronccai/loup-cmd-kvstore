@@ -51,13 +51,58 @@ This one is a `host.native` (host-compiled) project.
 ## Requirements
 
 - Linux x86-64 (the open flags are Linux's).
-- Loup 1.26.0 or later:
-
-  ```sh
-  curl -fsSL https://github.com/code-craft-ai-company/loup-releases/releases/latest/download/loup-install.sh | sh
-  ```
-
+- [Loup Lite](https://github.com/code-craft-ai-company/loup-releases) 1.26.0
+  or later; see [Installing Loup Lite](#installing-loup-lite).
 - `make`, and `clang` 17 or later for the native build.
+
+## Installing Loup Lite
+
+This example is built and tested with **Loup Lite**, the free public build of
+the Loup toolchain from [Code Craft AI](https://code-craft.ai), meant for
+education and training. Code Craft AI publishes the official builds,
+installers and signed checksums at
+**<https://github.com/code-craft-ai-company/loup-releases>**, for Linux
+(x86-64, arm64), macOS (Apple silicon, Intel) and Windows (x86-64).
+
+Linux and macOS:
+
+```sh
+curl -fsSL https://github.com/code-craft-ai-company/loup-releases/releases/latest/download/loup-install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://github.com/code-craft-ai-company/loup-releases/releases/latest/download/loup-install.ps1 | iex
+```
+
+The installer picks the archive for your machine, checks it against the
+release's `SHA256SUMS`, unpacks it into `~/.loup`
+(`%LOCALAPPDATA%\Programs\Loup` on Windows) and puts its `bin` directory on
+your `PATH`; it needs no administrator rights. You get `loup`, the Stage0
+compiler `loup-bootstrap` and the Wasm runtime `loup-launcher`. Open a new
+shell and check:
+
+```sh
+loup --version             # loup 1.26.0 or later
+```
+
+CI installs the exact version it tests with, 1.26.0. To do the same:
+
+```sh
+curl -fsSL https://github.com/code-craft-ai-company/loup-releases/releases/download/v1.26.0/loup-install.sh | sh -s -- --version 1.26.0
+```
+
+To install by hand, download your platform's archive from the
+[releases page](https://github.com/code-craft-ai-company/loup-releases/releases),
+check it against `SHA256SUMS`, unpack it anywhere and add its `bin` directory to
+`PATH`. The [loup-releases README](https://github.com/code-craft-ai-company/loup-releases#verify-a-download)
+explains how to verify the Sigstore signature on `SHA256SUMS`.
+
+Loup Lite leaves out Loup's cryptography library and the full set of Loup
+packages; this example needs neither. The full release is at
+<https://code-craft.ai/loup/download>, and commercial use of Loup needs a
+license: <https://code-craft.ai/loup/license>.
 
 ## Usage
 

@@ -55,6 +55,9 @@ needed.
 Prerequisites: Linux x86-64, Loup 1.26.0 (`loup` and `loup-bootstrap` on
 `PATH`), `make`, and `clang` 17 or later.
 
+Loup Lite comes from <https://github.com/code-craft-ai-company/loup-releases>;
+[README.md](README.md#installing-loup-lite) has the install commands.
+
 | Task | Command | Notes |
 |------|---------|-------|
 | Run | `make run ARGS="--file /tmp/demo.kv put k v"` | builds `build/kvstore`, then runs it: `loup run` cannot call libc |
