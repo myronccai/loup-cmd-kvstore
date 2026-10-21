@@ -57,7 +57,8 @@ func compact(takes store: Store): CompactResult
 - `edits` lets a command change the caller's store without taking it.
 - `compact` takes the store: it writes the new log, `del`s the old store
   (which runs `LogFile.finalize` and closes the descriptor at that point),
-  renames the new file into place, and returns the counts. Using the store
+  renames the new file into place, fsyncs the directory so the rename is
+  durable, and returns the counts. Using the store
   after `compact(takes: store)` is a compile error (`E_USE_AFTER_TAKE`).
 
 ### Records
@@ -77,16 +78,23 @@ length in characters is its length in bytes, which makes byte offsets
 ### Replay
 
 `replay(text)` checks the header (an empty file, or a prefix of the header,
-is an empty store whose prefix is torn), then walks the lines. Each good
-record updates `index: dict[string, string]` and the counters and advances
-`good_bytes`. The first bad or unterminated line ends the walk; the file size
-minus `good_bytes` is the torn tail.
+is an empty store whose prefix is torn), then walks the records with a
+`RecordReader`, an `Iterator[Record]` over the lines that advances
+`good_bytes` past each good record. Each record updates
+`index: dict[string, string]` and the counters. The first bad or
+unterminated line ends the iteration; the file size minus `good_bytes` is
+the torn tail.
 
 ## Error handling
 
-`StoreError` (an `Exception`) reports file problems: not a kvstore log, open
-or write failures. `run` maps it to `kvstore: message` and status 2. A
-missing key is status 1. Usage errors are status 2 with the `Try` line.
+`StoreError` (an `Exception` with the file in `path`) reports file
+problems: open, write, truncate, rename or directory-sync failures; its
+subclass `NotAStoreError` reports a file that is not a kvstore log. The
+message is `PATH: what`. `run` maps any of them to `kvstore: message` and
+status 2. If writing the compacted log fails, `compact` removes the partial
+`PATH.compact` and rethrows, so the old log stays as it was. A missing key
+is status 1. Usage errors (from `parse_args`, `check_command` and
+`resolve_file`, each a `Result`) are status 2 with the `Try` line.
 
 ## Testing
 

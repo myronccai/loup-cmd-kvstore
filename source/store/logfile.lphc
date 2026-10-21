@@ -1,13 +1,19 @@
 @mode(host.native)
 
 # The kvstore file-handle owner: the log's open descriptor, with append plus
-# fsync, truncate, and an atomic replace.
+# fsync, truncate, and an atomic, durable replace; and the store's errors.
 #
 # Runtime: host.native. Compiled into the native binary build/kvstore by
 # `make build` (Stage0 native build). libc is called directly through
 # `extern native`, which only a native binary can do: `loup run` stops at
 # the first call. The flag values are Linux's. The store tests use it on
 # real files inside native test binaries.
+#
+# Structure: the libc declarations and flags, the error classes, the
+# unique class LogFile, then replace_file() and sync_directory(), which
+# together make a compaction's rename(2) durable.
+
+from io.path import (dirname);
 
 extern native "c" func open(path: string, flags: int32, mode: int32): int32;
 extern native "c" func write(fd: int32, data: string, count: uint64): int64;
@@ -16,14 +22,38 @@ extern native "c" func ftruncate(fd: int32, length: int64): int32;
 extern native "c" func close(fd: int32): int32;
 extern native "c" func rename(src: string, dst: string): int32;
 
-const O_WRONLY: int = 1;
-const O_CREAT: int = 64;
-const O_TRUNC: int = 512;
-const O_APPEND: int = 1024;
+# The open(2) flags, in octal as <fcntl.h> writes them (Linux values).
+const O_RDONLY: int = 0o0;
+const O_WRONLY: int = 0o1;
+const O_CREAT: int = 0o100;
+const O_TRUNC: int = 0o1000;
+const O_APPEND: int = 0o2000;
+const O_DIRECTORY: int = 0o200000;
 # rw-r--r--
-const FILE_MODE: int = 420;
+const FILE_MODE: int = 0o644;
 
-pub class StoreError : Exception {}
+# Every failure of the store: the file it concerns, and a message in the
+# "PATH: what went wrong" form the command prints. Catching StoreError also
+# catches its subclasses.
+#
+# The subclasses live in this module too: Stage0 rejects a subclass of an
+# exception class imported from another module (E_THROW_NON_ERROR).
+pub class StoreError : Exception {
+    pub let path: string;
+
+    new(path: string, what: string) {
+        super(path + ": " + what);
+        this.path = path;
+    }
+}
+
+# The file exists but is not a kvstore log, so the store refuses to touch
+# it (store/store.lphc read_store).
+pub class NotAStoreError : StoreError {
+    new(path: string, why: string) {
+        super(path, why);
+    }
+}
 
 # One open file descriptor. A unique class has exactly one owner at a time,
 # so the descriptor cannot be used through a second reference after it is
@@ -40,27 +70,28 @@ pub unique class LogFile {
         let mode = if (truncate) { O_TRUNC } else { O_APPEND };
         this.fd = open(path, (O_WRONLY | O_CREAT | mode) as int32, FILE_MODE as int32);
         if (this.fd < 0) {
-            throw StoreError(i"{$ path $}: cannot open for writing");
+            throw StoreError(path, "cannot open for writing");
         }
     }
 
     # Appends `text` with one write() and makes it durable with fsync(). With
-    # O_APPEND the kernel places the write at the end of the file.
-    pub func append(text: string): void {
+    # O_APPEND the kernel places the write at the end of the file. `reads`:
+    # the file changes, the LogFile object does not.
+    pub reads func append(text: string): void {
         let want = text.byteLength();
         let wrote = write(this.fd, text, want as uint64);
         if (wrote != want as int64) {
-            throw StoreError(i"{$ this.path $}: write failed");
+            throw StoreError(this.path, "write failed");
         }
         if (fsync(this.fd) != 0) {
-            throw StoreError(i"{$ this.path $}: fsync failed");
+            throw StoreError(this.path, "fsync failed");
         }
     }
 
     # Cuts the file to `size` bytes (to drop a torn tail).
-    pub func cut(size: int): void {
+    pub reads func cut(size: int): void {
         if (ftruncate(this.fd, size as int64) != 0) {
-            throw StoreError(i"{$ this.path $}: cannot truncate");
+            throw StoreError(this.path, "cannot truncate");
         }
     }
 
@@ -69,9 +100,26 @@ pub unique class LogFile {
     }
 }
 
-# Atomically replaces `dst` with `src` (rename(2)).
+# Makes the directory entries of `dir` durable: a rename(2) or a new file is
+# only on disk once its directory has been fsync()ed too.
+pub func sync_directory(dir: string): void {
+    let fd = open(dir, (O_RDONLY | O_DIRECTORY) as int32, 0 as int32);
+    if (fd < 0) {
+        throw StoreError(dir, "cannot open the directory");
+    }
+    let status = fsync(fd);
+    close(fd);
+    if (status != 0) {
+        throw StoreError(dir, "fsync failed");
+    }
+}
+
+# Atomically replaces `dst` with `src` (rename(2)), then syncs the directory
+# that holds both, so after a crash the name refers to either the old file
+# or the new one, and once this returns, to the new one.
 pub func replace_file(src: string, dst: string): void {
     if (rename(src, dst) != 0) {
-        throw StoreError(i"{$ dst $}: cannot replace with {$ src $}");
+        throw StoreError(dst, "cannot replace with " + src);
     }
+    sync_directory(dirname(dst));
 }

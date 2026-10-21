@@ -155,7 +155,7 @@ pub func hex8(n: int): string {
     var v = n;
     for (k in 0..8) {
         out = "0123456789abcdef".slice(v & 0xF, (v & 0xF) + 1) + out;
-        v = v >> 4;
+        v >>= 4;
     }
     return out;
 }
@@ -200,11 +200,14 @@ pub func delete_record(key: string): Record {
 # checksum does not match: the caller treats that as the start of a torn
 # tail.
 pub func decode_line(line: string): Option[Record] {
-    if (line.len() < 11 or line.slice(8, 9) != " ") {
+    # The checksum field: 8 hex digits and a space. The shortest payload,
+    # `D k`, is 3 characters.
+    const CRC_DIGITS: int = 8;
+    if (line.len() < CRC_DIGITS + 3 or line.slice(CRC_DIGITS, CRC_DIGITS + 1) != " ") {
         return None;
     }
-    let want = parse_hex8(line.slice(0, 8));
-    let payload = line.slice(9);
+    let want = parse_hex8(line.slice(0, CRC_DIGITS));
+    let payload = line.slice(CRC_DIGITS + 1);
     if (want < 0 or crc32_ascii(payload) != want) {
         return None;
     }

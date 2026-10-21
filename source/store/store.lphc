@@ -9,23 +9,28 @@
 # Structure: readers call read_store(), which replays the log into a Replay
 # value and never opens the file for writing. Writers own a Store: a unique
 # class holding the LogFile and the index, changed through `edits` and
-# consumed by compact() through `takes`.
+# consumed by compact() through `takes`. compact() writes the new log next
+# to the old one and renames it into place; if writing fails, it removes
+# its partial file and rethrows, leaving the old log as it was.
 
 from store.codec import (put_record, delete_record, encode_record);
 from store.replay import (Replay, HEADER, replay, empty_replay, records, sorted_keys);
-from store.logfile import (LogFile, StoreError, replace_file);
+from store.logfile import (LogFile, StoreError, NotAStoreError, replace_file);
+from io.fs import (remove);
 
 # Reads and replays the log at `path`; an empty state if it does not exist.
+# Throws NotAStoreError for a file that is not a kvstore log. The file is
+# read once: natively readText keeps every byte, so its byteLength() is the
+# file size (Stage0 would reject a non-UTF-8 file, but replays run natively).
 pub func read_store(path: string): Replay {
     if (!exists(path)) {
         return empty_replay();
     }
-    let size = readBytes(path).len();
     let text = readText(path);
-    return match replay(text, size) {
+    return match replay(text, text.byteLength()) {
         Ok(state) => state,
         Err(msg) => {
-            throw StoreError(i"{$ path $}: {$ msg $}");
+            throw NotAStoreError(path, msg);
         },
     };
 }
@@ -56,7 +61,8 @@ pub unique class Store {
         }
     }
 
-    pub func get(key: string): Option[string] {
+    # `reads`: a lookup needs neither the descriptor nor a change.
+    pub reads func get(key: string): Option[string] {
         return this.state.index.get(key);
     }
 
@@ -89,20 +95,32 @@ pub struct CompactResult {
     pub bytes_after: int;
 }
 
+# The record line that puts `key`'s current value.
+func live_record(state: Replay, key: string): string {
+    return encode_record(put_record(key, state.index.get(key).unwrap_or("")));
+}
+
 # The text of a compacted log: the header and one put per live key, in key
-# order.
+# order. (The lookup is in live_record() because the Stage0 native lane
+# mishandles a dict method called inside a comprehension: the value came
+# back empty.)
 pub func compacted_text(state: Replay): string {
-    var parts = [HEADER];
-    for (key in sorted_keys(state)) {
-        parts.push(encode_record(put_record(key, state.index.get(key).unwrap_or(""))));
-    }
+    let parts: list[string] = [HEADER] + [live_record(state, key) for key in sorted_keys(state)];
     return parts.join("");
+}
+
+# Writes `text` to a new file at `path` (emptied if it exists) and makes it
+# durable. The LogFile is closed when it goes out of scope.
+func write_new_log(path: string, text: string): void {
+    let out = LogFile(path, true);
+    out.append(text);
 }
 
 # Rewrites the log with only the live records. The new log is written to
 # PATH.compact and made durable, the old store is consumed (its descriptor
-# closed), and rename() swaps the new file in: a crash leaves either the old
-# log or the new one. The caller's store cannot be used afterwards.
+# closed), and replace_file() renames the new file over the old one and
+# syncs the directory: a crash leaves either the old log or the new one.
+# The caller's store cannot be used afterwards.
 pub func compact(takes store: Store): CompactResult {
     let path = store.path;
     let text = compacted_text(store.state);
@@ -113,9 +131,16 @@ pub func compact(takes store: Store): CompactResult {
         bytes_after = text.len(),
     );
     let tmp = path + ".compact";
-    let out = LogFile(tmp, true);
-    out.append(text);
-    del out;
+    try {
+        write_new_log(tmp, text);
+    } catch (StoreError as e) {
+        # The old log is untouched. Remove the partial new one, then let the
+        # same error (path and message) reach the caller.
+        if (exists(tmp)) {
+            remove(tmp);
+        }
+        throw e;
+    }
     del store;
     replace_file(tmp, path);
     return result;

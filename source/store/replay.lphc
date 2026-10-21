@@ -11,6 +11,10 @@
 # delete (store/codec.lphc). Replay stops at the first line that does not
 # decode or is not terminated; everything from there to the end of the file
 # is the torn tail, which the next writer cuts off (store/store.lphc).
+#
+# Structure: the Replay state, RecordReader (an iterator over the good
+# records that counts their bytes), replay() (header check, then one
+# `for` over a RecordReader), and queries on a Replay.
 
 from store.codec import (Record, PUT, decode_line);
 
@@ -34,6 +38,50 @@ pub func empty_replay(): Replay {
     return Replay(index = index, puts = 0, deletes = 0, has_header = false, good_bytes = 0, torn_bytes = 0);
 }
 
+# The good records of a log body (the text after the header), in order.
+# Iteration stops at the first line that is not terminated or does not
+# decode; good_bytes then counts the bytes up to there, which is where the
+# next record must be written.
+#
+# It is its own Iterable (iter() returns itself), so replay() can read
+# good_bytes after the `for` loop has used it up. A `for` over a custom
+# Iterator works in the Stage0 native lane kvstore builds with; the
+# self-hosted native build would run the loop zero times.
+pub class RecordReader implements Iterable[Record], Iterator[Record] {
+    # Every element but the last ended with a newline; the last is "" when
+    # the file ends cleanly, or an unterminated (torn) record.
+    let lines: list[string];
+    var at: int = 0;
+    pub var good_bytes: int;
+
+    # `body` follows `start` bytes of the file that are already known good.
+    new(body: string, start: int) {
+        this.lines = body.split("\n");
+        this.good_bytes = start;
+    }
+
+    pub func iter(): Iterator[Record] {
+        return this;
+    }
+
+    pub modifier func next(): Option[Record] {
+        if (this.at >= this.lines.len() - 1) {
+            return None;
+        }
+        let line = this.lines[this.at];
+        let decoded = decode_line(line);
+        if (decoded.is_none()) {
+            # The torn tail starts here: end the iteration for good.
+            this.at = this.lines.len();
+            return None;
+        }
+        # Records are ASCII: characters and bytes agree.
+        this.good_bytes = this.good_bytes + line.len() + 1;
+        this.at = this.at + 1;
+        return decoded;
+    }
+}
+
 # Replays `text`, the whole file, whose size in bytes is `size`. Err if the
 # file is not a kvstore log (it does not start with the header, and is not a
 # torn prefix of it either).
@@ -48,18 +96,8 @@ pub func replay(text: string, size: int): Result[Replay, string] {
         return Err("not a kvstore log");
     }
     state.has_header = true;
-    var good = HEADER.len();
-    let lines = text.slice(HEADER.len()).split("\n");
-    # Every element but the last ended with a newline; the last is "" when
-    # the file ends cleanly, or an unterminated (torn) record.
-    var i = 0;
-    while (i < lines.len() - 1) {
-        let line = lines[i];
-        let decoded = decode_line(line);
-        if (decoded.is_none()) {
-            break;
-        }
-        let rec = decoded.unwrap();
+    var reader = RecordReader(text.slice(HEADER.len()), HEADER.len());
+    for (rec in reader) {
         if (rec.op == PUT) {
             state.index[rec.key] = rec.value;
             state.puts += 1;
@@ -67,12 +105,9 @@ pub func replay(text: string, size: int): Result[Replay, string] {
             state.index.remove(rec.key);
             state.deletes += 1;
         }
-        # Records are ASCII: characters and bytes agree.
-        good += line.len() + 1;
-        i += 1;
     }
-    state.good_bytes = good;
-    state.torn_bytes = size - good;
+    state.good_bytes = reader.good_bytes;
+    state.torn_bytes = size - reader.good_bytes;
     return Ok(state);
 }
 

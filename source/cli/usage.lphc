@@ -9,19 +9,26 @@
 from appinfo import (APP_NAME, APP_VERSION, APP_SUMMARY, FILE_ENV);
 
 pub func usage(): string {
+    # The command table interpolates nothing, so it is one multiline string.
+    # Its lines start at the indentation of the `let` (which is stripped);
+    # the newlines right after the opening and before the closing quotes
+    # are dropped.
+    let commands = """
+    Commands:
+      put KEY VALUE         Set KEY to VALUE
+      get KEY               Print the value of KEY
+      del KEY               Delete KEY
+      scan [PREFIX]         Print KEY<TAB>VALUE for every key (with PREFIX), sorted
+      compact               Rewrite the log with only the live records
+      stats                 Print the size, record counts and torn-tail size
+      help                  Show this help
+    """;
     let lines = [
         i"usage: {$ APP_NAME $} [OPTIONS] COMMAND [ARGS...]",
         "",
         APP_SUMMARY,
         "",
-        "Commands:",
-        "  put KEY VALUE         Set KEY to VALUE",
-        "  get KEY               Print the value of KEY",
-        "  del KEY               Delete KEY",
-        "  scan [PREFIX]         Print KEY<TAB>VALUE for every key (with PREFIX), sorted",
-        "  compact               Rewrite the log with only the live records",
-        "  stats                 Print the size, record counts and torn-tail size",
-        "  help                  Show this help",
+        commands,
         "",
         "Options:",
         i"  -f, --file FILE       The data file (default: ${$ FILE_ENV $})",

@@ -62,12 +62,15 @@ func test_decode_line(): void {
     expect_text(gone.op, DELETE, "delete op");
     let empty_value = decode_line(encode_record(put_record("k", "")).slice(0, 13)).unwrap();
     expect_text(empty_value.value, "", "empty value");
+    let shortest = encode_record(delete_record("k"));
+    expect(decode_line(shortest.slice(0, shortest.len() - 1)).is_some(), "the shortest record");
 }
 
 func test_decode_rejects(): void {
     expect(decode_line("128105d1 P user:1 Ann%20Lef").is_none(), "checksum mismatch");
     expect(decode_line("128105d1 P user:1").is_none(), "put without value");
     expect(decode_line("").is_none(), "empty line");
+    expect(decode_line("b6e86ad7 D").is_none(), "shorter than the shortest record");
     expect(decode_line("128105d1").is_none(), "only a checksum");
     expect(decode_line("XYZ05d1z P a b").is_none(), "checksum not hex");
     let bad_op = encode_record(put_record("a", "b")).replace("P a", "Q a");

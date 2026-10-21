@@ -1,7 +1,8 @@
 @mode(host.native)
 
 # Unit tests for replaying a kvstore log (store/replay.lphc): headers,
-# records, torn tails and corrupt lines, all from hand-made text.
+# records, torn tails, corrupt lines and the RecordReader iterator, all from
+# hand-made text.
 #
 # Runtime: host.native, run by the test runner: `make test` runs
 # `loup-bootstrap test --native`, which compiles each `func test_*()` here,
@@ -10,7 +11,7 @@
 
 from debug.assert import (expect, expectEq);
 from store.codec import (encode_record, put_record, delete_record);
-from store.replay import (HEADER, replay, records, stale_records, sorted_keys);
+from store.replay import (HEADER, RecordReader, replay, records, stale_records, sorted_keys);
 from helpers import (expect_text);
 
 func log(lines: list[string]): string {
@@ -98,4 +99,20 @@ func test_size_counts_bytes(): void {
     let good = log([p("a", "1")]);
     let state = replay(good + "é", good.len() + 2).unwrap();
     expectEq(state.torn_bytes, 2, "two bytes of torn tail");
+}
+
+func test_record_reader_stops_at_the_torn_tail(): void {
+    let body = p("a", "1") + d("a") + "00000000 P bad record\n" + p("c", "3");
+    var reader = RecordReader(body, 10);
+    var keys: list[string] = [];
+    for (rec in reader) {
+        keys.push(rec.op + rec.key);
+    }
+    expect_text(keys.join(","), "Pa,Da", "the records before the corrupt line");
+    expectEq(reader.good_bytes, 10 + p("a", "1").len() + d("a").len(), "good bytes");
+    var again = 0;
+    for (rec in reader) {
+        again += 1;
+    }
+    expectEq(again, 0, "a used-up reader stays empty");
 }

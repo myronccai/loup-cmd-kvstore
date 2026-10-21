@@ -104,8 +104,10 @@ pub func run_command(command: string, operands: list[string], path: string): int
     }
 
     # Writers: opening the Store cuts a torn tail and writes the header of a
-    # new file before the first record is appended.
-    let store = open_store(path);
+    # new file before the first record is appended. A unique binding: the
+    # Store has this one owner, which lends it out with `edits` or hands it
+    # to compact() with `takes`, after which it cannot be used.
+    unique let store = open_store(path);
     if (command == "put") {
         return cmd_put(edits: store, operands[0], operands[1]);
     } else if (command == "del") {

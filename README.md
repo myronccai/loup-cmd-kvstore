@@ -20,33 +20,47 @@ This one is a `host.native` (host-compiled) project.
   at `del` or at the end of the owner's scope. `unique class` is accepted only
   in `host.native` (and `freestanding`): in a `host.dual` file it is
   `E_UNIQUE_CLASS_ARC_BINDING`.
-- **Ownership verbs.** Commands change the store through
-  `cmd_put(edits store: Store, ...)`; compaction consumes it:
+- **Ownership verbs.** The command holds its store in a `unique let`
+  binding, lends it out with `cmd_put(edits store: Store, ...)`, and
+  compaction consumes it; read-only methods are declared `pub reads func`:
 
   ```loup
   pub func compact(takes store: Store): CompactResult {
       ...
-      let out = LogFile(tmp, true);   # PATH.compact, emptied
-      out.append(text);               # one write(), then fsync()
-      del out;                        # close the new file
+      try {
+          write_new_log(tmp, text);   # PATH.compact: one write(), fsync()
+      } catch (StoreError as e) {
+          if (exists(tmp)) {
+              remove(tmp);            # no half-written file left behind
+          }
+          throw e;                    # the same error, path and message
+      }
       del store;                      # close the old log's descriptor now
-      replace_file(tmp, path);        # rename(2): old log or new, never half
+      replace_file(tmp, path);        # rename(2), then fsync the directory
       return result;
   }
   ```
 
   After `compact(takes: store)` the caller cannot touch `store` again; the
   compiler reports `E_USE_AFTER_TAKE`.
+- **Errors as a class hierarchy.** Store failures throw `StoreError`, which
+  carries the file in a `pub let path` field; `NotAStoreError` extends it
+  for a file that is not a kvstore log. The command line handles its usage
+  errors (each step returns a `Result`) with `attempt` and one
+  `catch Err(msg)`.
 - **Calling C.** `open`, `write`, `fsync`, `ftruncate`, `close` and `rename`
   are libc functions declared with `extern native "c"`. They run only in a
-  native binary; `loup run` stops at the first call.
+  native binary; `loup run` stops at the first call. The open flags are
+  written in octal, as `<fcntl.h>` has them (`O_APPEND = 0o2000`).
 - **Crash-safe records.** Each record is one line with a CRC-32 (written in
   Loup) of its payload, written with one `write()` on an `O_APPEND`
   descriptor and made durable with `fsync()`. Replay stops at the first
   unterminated, malformed or corrupt line; a write command first cuts that
   torn tail off with `ftruncate()`.
 - **Pure replay.** `replay(text)` turns the file's text into the index and
-  counters without touching the file system, so most tests need no file.
+  counters without touching the file system, so most tests need no file. It
+  reads the records with `for (rec in reader)` over a `RecordReader`, a
+  class that implements `Iterator[Record]` and stops at the torn tail.
 
 ## Requirements
 
@@ -217,9 +231,6 @@ is its length in bytes.
 - One process at a time: there is no file lock.
 - The whole log is read and replayed on every run, and the index holds the
   values in memory; fine for thousands of keys, not for gigabytes.
-- `compact` does not `fsync` the directory after `rename()`, so on some file
-  systems a power failure right after compaction can bring back the old log
-  (never a mix of both).
 - A corrupt record in the middle of the log ends the replay there, like a
   torn tail: later records are ignored and cut off by the next write.
 - Linux x86-64 only (libc flag values).
@@ -235,7 +246,7 @@ source/cli/app.lphc           # run(): parse, dispatch, exit status
 source/store/crc32.lphc       # CRC-32
 source/store/codec.lphc       # percent-encoding, record lines
 source/store/replay.lphc      # replay(): index, counters, torn tail
-source/store/logfile.lphc     # libc calls; unique class LogFile
+source/store/logfile.lphc     # libc calls; StoreError; unique class LogFile
 source/store/store.lphc       # unique class Store; compact(takes store)
 source/commands/kv.lphc       # the commands and their output
 tests/*_test.lphc             # native unit tests (make test)

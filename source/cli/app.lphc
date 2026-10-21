@@ -19,36 +19,32 @@ pub func run(argv: list[string]): int {
     return run_with_env(argv, env(FILE_ENV));
 }
 
-# As run(), with the value of KVSTORE_FILE passed in.
+# As run(), with the value of KVSTORE_FILE passed in. Every step before the
+# command returns a Result whose Err is a usage message: `attempt` unwraps
+# each Ok and sends the first Err to the one `catch Err` below.
 pub func run_with_env(argv: list[string], file_env: Option[string]): int {
-    let opts = match parse_args(argv) {
-        Ok(parsed) => parsed,
-        Err(msg) => {
-            return usage_error(msg);
-        },
-    };
+    try {
+        let opts = attempt parse_args(argv);
+        if (opts.help or opts.command == "help") {
+            println(usage());
+            return EXIT_OK;
+        }
+        if (opts.version) {
+            println(version_line());
+            return EXIT_OK;
+        }
+        # Only the check matters, not the command name it returns.
+        let _ = attempt check_command(opts);
+        let path = attempt resolve_file(opts, file_env);
+        return run_checked(opts, path);
+    } catch Err(msg) {
+        return usage_error(msg);
+    }
+}
 
-    if (opts.help or opts.command == "help") {
-        println(usage());
-        return EXIT_OK;
-    }
-    if (opts.version) {
-        println(version_line());
-        return EXIT_OK;
-    }
-    match check_command(opts) {
-        Ok(cmd) => {},
-        Err(msg) => {
-            return usage_error(msg);
-        },
-    }
-    let path = match resolve_file(opts, file_env) {
-        Ok(p) => p,
-        Err(msg) => {
-            return usage_error(msg);
-        },
-    };
-
+# Runs a checked command. Store failures are exceptions (StoreError and its
+# subclasses), reported as "kvstore: PATH: what" with exit status 2.
+func run_checked(opts: Options, path: string): int {
     try {
         return run_command(opts.command, opts.operands, path);
     } catch (Exception as e) {

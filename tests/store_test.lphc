@@ -1,7 +1,9 @@
 @mode(host.native)
 
 # Unit tests for the kvstore Store against real files, in the test binary's
-# temporary working directory.
+# temporary working directory: reopening, torn tails, foreign files,
+# compaction (and its clean-up when the new log cannot be written), and the
+# directory sync that makes a rename durable.
 #
 # Runtime: host.native, run by the test runner: `make test` runs
 # `loup-bootstrap test --native`, which compiles each `func test_*()` here,
@@ -12,7 +14,12 @@ from debug.assert import (expect, expectEq);
 from store.replay import (HEADER);
 from store.codec import (encode_record, put_record);
 from store.store import (Store, read_store, compact, compacted_text);
+from store.logfile import (StoreError, NotAStoreError, sync_directory);
 from helpers import (expect_text, empty_file);
+
+# To make a write fail on demand: a symbolic link to /dev/full, where every
+# write() fails with ENOSPC.
+extern native "c" func symlink(target: string, linkpath: string): int32;
 
 func test_put_get_and_reopen(): void {
     let path = empty_file("reopen.kv");
@@ -70,11 +77,25 @@ func test_foreign_file_is_refused_and_kept(): void {
     try {
         let store = Store(path);
         del store;
-    } catch (Exception as e) {
-        refused = e.message.contains("not a kvstore log");
+    } catch (NotAStoreError as e) {
+        # The subclass is caught by its own type and carries the path.
+        expect_text(e.path, path, "the error names the file");
+        expect_text(e.message, "foreign.txt: not a kvstore log", "message");
+        refused = true;
     }
     expect(refused, "not a kvstore log");
     expect_text(readText(path), "shopping list\n", "the file is unchanged");
+}
+
+func test_store_errors_share_a_base_class(): void {
+    writeText("list.txt", "eggs\n");
+    var caught = "";
+    try {
+        let _ = read_store("list.txt");
+    } catch (StoreError as e) {
+        caught = e.path;
+    }
+    expect_text(caught, "list.txt", "a NotAStoreError is a StoreError");
 }
 
 func test_compact(): void {
@@ -98,4 +119,43 @@ func test_compact(): void {
     reopened.put("d", "5");
     del reopened;
     expectEq(read_store(path).index.len(), 3, "the compacted log takes appends");
+}
+
+func test_failed_compaction_keeps_the_old_log(): void {
+    let path = empty_file("full.kv");
+    let store = Store(path);
+    store.put("a", "1");
+    store.put("a", "2");
+    del store;
+    let before = readText(path);
+    let tmp = path + ".compact";
+    expectEq(symlink("/dev/full", tmp) as int, 0, "symlink to /dev/full");
+    expect(exists(tmp), "the trap is set");
+    var what = "";
+    var named = "";
+    try {
+        let _ = compact(takes: Store(path));
+    } catch (StoreError as e) {
+        what = e.message;
+        named = e.path;
+    }
+    expect_text(named, tmp, "the error names the new log");
+    expect_text(what, tmp + ": write failed", "the rethrown message");
+    expect(!exists(tmp), "the partial new log is removed");
+    expect_text(readText(path), before, "the old log is untouched");
+    expectEq(read_store(path).index.len(), 1, "and still replays");
+}
+
+func test_sync_directory(): void {
+    sync_directory(".");
+    writeText("plain.txt", "x");
+    for (dir in ["no-such-dir", "plain.txt"]) {
+        var failed_on = "";
+        try {
+            sync_directory(dir);
+        } catch (StoreError as e) {
+            failed_on = e.path;
+        }
+        expect_text(failed_on, dir, i"cannot sync {$ dir $}");
+    }
 }
