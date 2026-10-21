@@ -1,5 +1,13 @@
 @mode(host.native)
 
+# Unit tests for the kvstore record codec (store/codec.lphc): escaping,
+# UTF-8, checksums and whole records.
+#
+# Runtime: host.native, run by the test runner: `make test` runs
+# `loup-bootstrap test --native`, which compiles each `func test_*()` here,
+# with the modules it imports from source/ and tests/ (both on LOUPPATH),
+# into its own native binary and runs it. Not part of build/kvstore.
+
 from debug.assert import (expect, expectEq);
 from store.codec import (escape, unescape, utf8_bytes, utf8_decode, encode_record,
     decode_line, put_record, delete_record, hex8, PUT, DELETE);

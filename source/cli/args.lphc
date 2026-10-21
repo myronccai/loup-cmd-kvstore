@@ -1,11 +1,20 @@
 @mode(host.native)
 
-# Command-line parsing. Loup 1.26 has no CLI library, so arguments are
-# parsed by hand into an Options value.
+# Command-line parsing for kvstore. Loup 1.26 has no CLI library, so
+# arguments are parsed by hand into an Options value.
+#
+# Runtime: host.native. Compiled into the native binary build/kvstore by
+# `make build` (Stage0 native build). Pure functions; tests/args_test.lphc
+# checks them in native test binaries.
 #
 # Grammar: [OPTIONS] COMMAND [OPERANDS...]
 #   Options may appear anywhere before `--`; everything after `--` is an
 #   operand. Value options accept `--name VALUE` and `--name=VALUE`.
+#
+# Structure: parse_args() only sorts argv into options, the command and its
+# operands; resolve_file() picks --file or else KVSTORE_FILE; then
+# check_command() validates the command and its operand count against
+# operand_range().
 
 from appinfo import (FILE_ENV);
 
@@ -31,6 +40,8 @@ pub func parse_args(argv: list[string]): Result[Options, string] {
         let arg = argv[i];
         i += 1;
 
+        # A non-option, or anything after `--`: the first one is the
+        # command, the rest are its operands.
         if (only_operands or arg == "-" or !arg.startsWith("-")) {
             if (command.len() == 0) {
                 command = arg;

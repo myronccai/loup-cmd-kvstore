@@ -1,6 +1,13 @@
 @mode(host.native)
 
-# The record codec. A log line is
+# The kvstore record codec: how one put or delete is written as a line of
+# the log, and read back.
+#
+# Runtime: host.native. Compiled into the native binary build/kvstore by
+# `make build` (Stage0 native build). Pure functions; tests/codec_test.lphc
+# checks them in native test binaries.
+#
+# Format. After the file's header line (store/replay.lphc), a log line is
 #
 #     <crc32: 8 lowercase hex digits> <payload>
 #
@@ -8,6 +15,10 @@
 # VALUE are percent-encoded: every byte of their UTF-8 form outside `!`..`~`,
 # and `%` itself, becomes `%XX`. A line is therefore printable ASCII with no
 # spaces inside a field, and its length in characters is its length in bytes.
+#
+# Structure: percent-encoding (utf8_bytes, escape), its reverse with a strict
+# UTF-8 decoder (utf8_decode, unescape), the checksum field (hex8,
+# parse_hex8), then whole records (encode_record, decode_line).
 
 from store.crc32 import (crc32_ascii);
 

@@ -1,9 +1,15 @@
 @mode(host.native)
 
-# The store. Readers replay the log into a Replay value and never open the
-# file for writing. Writers own a Store: a unique class holding the LogFile
-# and the index, changed through `edits` and consumed by compaction through
-# `takes`.
+# The kvstore store: reading, appending to and compacting the log file.
+#
+# Runtime: host.native. Compiled into the native binary build/kvstore by
+# `make build` (Stage0 native build); tests/store_test.lphc drives it
+# against real files in the test binary's temporary working directory.
+#
+# Structure: readers call read_store(), which replays the log into a Replay
+# value and never opens the file for writing. Writers own a Store: a unique
+# class holding the LogFile and the index, changed through `edits` and
+# consumed by compact() through `takes`.
 
 from store.codec import (put_record, delete_record, encode_record);
 from store.replay import (Replay, HEADER, replay, empty_replay, records, sorted_keys);

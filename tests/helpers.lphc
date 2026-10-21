@@ -1,7 +1,11 @@
 @mode(host.native)
 
-# Shared test helpers. Not a test file itself: the tests import it (the
-# Makefile puts tests/ on LOUPPATH).
+# Shared helpers for the kvstore tests. Not a test file itself: the tests
+# import it.
+#
+# Runtime: host.native, test support. Never built on its own: `make test`
+# puts tests/ on LOUPPATH, so `loup-bootstrap test --native` compiles it into
+# each test binary that imports it. Not part of build/kvstore.
 
 from debug.assert import (expect);
 from store.logfile import (LogFile);

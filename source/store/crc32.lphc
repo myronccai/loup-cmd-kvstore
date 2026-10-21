@@ -1,8 +1,13 @@
 @mode(host.native)
 
-# CRC-32 (IEEE 802.3, the zlib and PNG polynomial, reflected 0xEDB88320),
-# table-driven. Records are ASCII, so each character is one byte. Loup's
-# `int` is 64 bits, so the 32-bit register is kept in range with masks.
+# CRC-32 for kvstore records (IEEE 802.3, the zlib and PNG polynomial,
+# reflected 0xEDB88320), table-driven.
+#
+# Runtime: host.native. Compiled into the native binary build/kvstore by
+# `make build` (Stage0 native build); tests/crc32_test.lphc checks known
+# values in native test binaries. Records are ASCII, so each character is
+# one byte. Loup's `int` is 64 bits; the register stays within 32 bits
+# because it is only shifted right and XORed with 32-bit table entries.
 
 func make_table(): list[int] {
     var table: list[int] = [];

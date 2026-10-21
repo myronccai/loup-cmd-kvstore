@@ -1,5 +1,12 @@
 @mode(host.native)
 
+# Unit tests for kvstore's argument parser (cli/args.lphc).
+#
+# Runtime: host.native, run by the test runner: `make test` runs
+# `loup-bootstrap test --native`, which compiles each `func test_*()` here,
+# with the modules it imports from source/ and tests/ (both on LOUPPATH),
+# into its own native binary and runs it. Not part of build/kvstore.
+
 from debug.assert import (expect, expectEq);
 from cli.args import (parse_args, resolve_file, check_command);
 from helpers import (expect_text);

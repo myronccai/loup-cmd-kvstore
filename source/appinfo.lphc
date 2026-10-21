@@ -1,7 +1,12 @@
 @mode(host.native)
 
-# Application identity. Keep APP_NAME and APP_VERSION in step with `name`
-# and `version` in package.lppkg.
+# Application identity, exit statuses and the data-file environment variable
+# of kvstore. Keep APP_NAME and APP_VERSION in step with `name` and `version`
+# in package.lppkg.
+#
+# Runtime: host.native. Constants only, compiled into the native binary
+# build/kvstore by `make build` (Stage0, `loup-bootstrap build --target
+# native`) and into each test binary that imports them.
 
 pub const APP_NAME: string = "kvstore";
 pub const APP_VERSION: string = "0.1.0";

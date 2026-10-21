@@ -1,5 +1,11 @@
 @mode(host.native)
 
+# The --help text and the --version line of kvstore.
+#
+# Runtime: host.native. Compiled into the native binary build/kvstore by
+# `make build` (Stage0 native build); tests/app_test.lphc prints both
+# through run_with_env().
+
 from appinfo import (APP_NAME, APP_VERSION, APP_SUMMARY, FILE_ENV);
 
 pub func usage(): string {

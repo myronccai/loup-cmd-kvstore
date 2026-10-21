@@ -1,5 +1,13 @@
 @mode(host.native)
 
+# Unit tests for the kvstore command renderers (commands/kv.lphc) on
+# replayed hand-made logs.
+#
+# Runtime: host.native, run by the test runner: `make test` runs
+# `loup-bootstrap test --native`, which compiles each `func test_*()` here,
+# with the modules it imports from source/ and tests/ (both on LOUPPATH),
+# into its own native binary and runs it. Not part of build/kvstore.
+
 from debug.assert import (expect, expectEq);
 from store.codec import (encode_record, put_record, delete_record);
 from store.replay import (HEADER, replay);

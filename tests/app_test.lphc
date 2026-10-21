@@ -1,8 +1,13 @@
 @mode(host.native)
 
-# Exit statuses through run_with_env(), with data files in the test
-# binary's temporary working directory. These tests print the program's
-# normal output.
+# Unit tests for kvstore's exit statuses through run_with_env(), with data
+# files in the test binary's temporary working directory. These tests print
+# the program's normal output.
+#
+# Runtime: host.native, run by the test runner: `make test` runs
+# `loup-bootstrap test --native`, which compiles each `func test_*()` here,
+# with the modules it imports from source/ and tests/ (both on LOUPPATH),
+# into its own native binary and runs it. Not part of build/kvstore.
 
 from debug.assert import (expectEq);
 from appinfo import (EXIT_OK, EXIT_NOT_FOUND, EXIT_USAGE, EXIT_FAILURE);

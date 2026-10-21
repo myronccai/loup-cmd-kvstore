@@ -1,7 +1,16 @@
 @mode(host.native)
 
-# Rebuilding the in-memory index by replaying the log. A pure function of
-# the file's text, so tests can replay hand-made logs without a file.
+# Rebuilding the kvstore index by replaying the log. A pure function of the
+# file's text, so tests can replay hand-made logs without a file.
+#
+# Runtime: host.native. Compiled into the native binary build/kvstore by
+# `make build` (Stage0 native build); tests/replay_test.lphc replays
+# hand-made logs in native test binaries.
+#
+# File layout: the header line `KVSTORE 1`, then one record line per put or
+# delete (store/codec.lphc). Replay stops at the first line that does not
+# decode or is not terminated; everything from there to the end of the file
+# is the torn tail, which the next writer cuts off (store/store.lphc).
 
 from store.codec import (Record, PUT, decode_line);
 

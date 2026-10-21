@@ -1,8 +1,13 @@
 @mode(host.native)
 
-# The file-handle owner. libc is called directly (`extern native`), which
-# only a native binary can do; `loup run` stops at the first call. The flag
-# values are Linux's.
+# The kvstore file-handle owner: the log's open descriptor, with append plus
+# fsync, truncate, and an atomic replace.
+#
+# Runtime: host.native. Compiled into the native binary build/kvstore by
+# `make build` (Stage0 native build). libc is called directly through
+# `extern native`, which only a native binary can do: `loup run` stops at
+# the first call. The flag values are Linux's. The store tests use it on
+# real files inside native test binaries.
 
 extern native "c" func open(path: string, flags: int32, mode: int32): int32;
 extern native "c" func write(fd: int32, data: string, count: uint64): int64;

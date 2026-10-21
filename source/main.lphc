@@ -1,7 +1,15 @@
 @mode(host.native)
 
-# Entry point. Keep this file thin: all behaviour lives in cli.app.run so
-# that tests can call it with an argument list.
+# kvstore: entry point. Keep this file thin: all behaviour lives in
+# cli.app.run so that tests can call it with an argument list.
+#
+# Runtime: host.native. main() gets the command line. `make build` compiles
+# this file and every module it imports ahead of time into the native binary
+# build/kvstore (reference counting, no interpreter) with Stage0,
+# `loup-bootstrap build --target native`. There is no interpreted lane:
+# store/logfile.lphc calls libc through `extern native`, which `loup run`
+# cannot do, so `make run` builds the binary and runs it. `make check`
+# type-checks the program from this file.
 
 from cli.app import (run);
 

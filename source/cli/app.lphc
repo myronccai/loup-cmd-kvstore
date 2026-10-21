@@ -1,5 +1,14 @@
 @mode(host.native)
 
+# Top level of kvstore: parse the arguments, answer --help, `help` and
+# --version, check the command, find the data file, run the command, and
+# turn an exception (a StoreError) into exit status 2.
+#
+# Runtime: host.native. Compiled into the native binary build/kvstore by
+# `make build` (Stage0, `loup-bootstrap build --target native`).
+# tests/app_test.lphc calls run_with_env() inside native test binaries, with
+# data files in the test binary's temporary working directory.
+
 from appinfo import (APP_NAME, EXIT_OK, EXIT_FAILURE, EXIT_USAGE, FILE_ENV);
 from cli.args import (Options, parse_args, resolve_file, check_command);
 from cli.usage import (usage, version_line);

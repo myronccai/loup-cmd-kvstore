@@ -1,8 +1,13 @@
 @mode(host.native)
 
-# The commands. Readers (get, scan, stats) work on a replayed state; writers
-# (put, del, compact) open a Store, which owns the file descriptor. The
-# render_* functions are pure so tests can check the output.
+# The kvstore commands. Readers (get, scan, stats) work on a replayed state;
+# writers (put, del, compact) open a Store, which owns the file descriptor.
+# The render_* functions are pure so tests can check the output.
+#
+# Runtime: host.native. Compiled into the native binary build/kvstore by
+# `make build` (Stage0 native build). tests/kv_test.lphc checks the
+# renderers in native test binaries; tests/e2e.sh runs every command through
+# the built binary on files in a temporary directory.
 
 from appinfo import (APP_NAME, EXIT_OK, EXIT_NOT_FOUND);
 from store.replay import (Replay, records, stale_records, sorted_keys);
@@ -85,6 +90,8 @@ pub func cmd_get(state: Replay, key: string): int {
 
 # Runs a checked command (see cli.args.check_command) on the store at path.
 pub func run_command(command: string, operands: list[string], path: string): int {
+    # Readers replay the file and never open it for writing, so they work
+    # on a read-only file and leave a torn tail in place.
     if (command == "get") {
         return cmd_get(read_store(path), operands[0]);
     } else if (command == "scan") {
@@ -96,6 +103,8 @@ pub func run_command(command: string, operands: list[string], path: string): int
         return EXIT_OK;
     }
 
+    # Writers: opening the Store cuts a torn tail and writes the header of a
+    # new file before the first record is appended.
     let store = open_store(path);
     if (command == "put") {
         return cmd_put(edits: store, operands[0], operands[1]);

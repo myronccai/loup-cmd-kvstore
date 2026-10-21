@@ -1,7 +1,12 @@
 @mode(host.native)
 
-# The store against real files, in the test binary's temporary working
-# directory.
+# Unit tests for the kvstore Store against real files, in the test binary's
+# temporary working directory.
+#
+# Runtime: host.native, run by the test runner: `make test` runs
+# `loup-bootstrap test --native`, which compiles each `func test_*()` here,
+# with the modules it imports from source/ and tests/ (both on LOUPPATH),
+# into its own native binary and runs it. Not part of build/kvstore.
 
 from debug.assert import (expect, expectEq);
 from store.replay import (HEADER);
